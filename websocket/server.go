@@ -52,6 +52,7 @@ type Message struct {
 	UserID    int    `json:"userId,omitempty"`
 	Status    string `json:"status,omitempty"`
 	IsActive  bool   `json:"isActive,omitempty"`
+	ID        int    `json:"id,omitempty"`
 }
 
 // Клиент WebSocket
@@ -332,19 +333,23 @@ func (manager *Manager) HandleConnections(w http.ResponseWriter, r *http.Request
 	}
 	manager.statusMutex.Unlock()
 
+	// Вызываем обновление статуса через централизованную функцию
 	manager.updateUserStatus(userId, "online", true)
 	log.Printf("✅ Пользователь %d подключился с адреса %s", userId, r.RemoteAddr)
 
-	// Отправляем новому клиенту статусы всех пользователей
+	// Отправляем новому клиенту статусы всех пользователей (кроме него самого)
 	manager.statusMutex.RLock()
 	for userID, status := range manager.UserStatuses {
-		statusMsg := Message{
-			Type:   "status",
-			UserID: userID,
-			Status: status.Status,
-		}
-		if statusData, err := json.Marshal(statusMsg); err == nil {
-			client.Send <- statusData
+		// Не отправляем пользователю его собственный статус
+		if userID != userId {
+			statusMsg := Message{
+				Type:   "status",
+				UserID: userID,
+				Status: status.Status,
+			}
+			if statusData, err := json.Marshal(statusMsg); err == nil {
+				client.Send <- statusData
+			}
 		}
 	}
 	manager.statusMutex.RUnlock()
@@ -422,41 +427,14 @@ func (c *Client) readPump(manager *Manager) {
 			continue
 
 		case "message":
-			// Сериализуем сообщение один раз
-			messageData, err := json.Marshal(msg)
-			if err != nil {
-				log.Println("Ошибка кодирования сообщения:", err)
-				continue
-			}
-
-			// Сохраняем сообщение в базу данных
-			manager.saveMessage(msg)
-			log.Printf("💾 Сохраняем сообщение в БД от %d к %d: %s", msg.FromID, msg.ToID, msg.Content)
-
-			// Отправляем сообщение только получателю
-			if recipient, ok := manager.Clients[msg.ToID]; ok {
-				recipient.Send <- messageData
-			}
-
-			// Отправляем копию отправителю
-			c.Send <- messageData
+			// Делегируем обработку сообщения HandleMessage
+			manager.HandleMessage(c, message)
 			continue
 
 		case "status":
 			// Обрабатываем сообщение о статусе
-			statusMsg := Message{
-				Type:   "status",
-				UserID: c.ID,
-				Status: msg.Status,
-			}
-			statusData, err := json.Marshal(statusMsg)
-			if err != nil {
-				log.Printf("Ошибка сериализации статуса: %v", err)
-				continue
-			}
-			// Отправляем статус всем клиентам
-			manager.broadcast(statusData)
-			log.Printf("Отправлен статус %s для пользователя %d", msg.Status, c.ID)
+			manager.updateUserStatus(c.ID, msg.Status, msg.IsActive)
+			log.Printf("Обновлен статус %s для пользователя %d", msg.Status, c.ID)
 		}
 	}
 }
@@ -512,12 +490,12 @@ func (c *Client) writePump() {
 }
 
 // Сохранение сообщения в базу данных
-func (manager *Manager) saveMessage(msg Message) {
+func (manager *Manager) saveMessage(msg Message) (Message, error) {
 	// Получаем или создаем ID чата
 	chatID, err := manager.getChatID(msg.FromID, msg.ToID, msg.ProductID)
 	if err != nil {
 		log.Printf("❌ Ошибка получения ID чата: %v", err)
-		return
+		return msg, err
 	}
 
 	// Подготовка запроса для вставки сообщения
@@ -527,7 +505,7 @@ func (manager *Manager) saveMessage(msg Message) {
 	`)
 	if err != nil {
 		log.Printf("❌ Ошибка подготовки запроса для сохранения сообщения: %v", err)
-		return
+		return msg, err
 	}
 	defer stmt.Close()
 
@@ -535,17 +513,20 @@ func (manager *Manager) saveMessage(msg Message) {
 	result, err := stmt.Exec(chatID, msg.FromID, msg.Content)
 	if err != nil {
 		log.Printf("❌ Ошибка выполнения запроса для сохранения сообщения: %v", err)
-		return
+		return msg, err
 	}
 
 	// Получение ID вставленной записи
 	lastID, err := result.LastInsertId()
 	if err != nil {
 		log.Printf("❌ Ошибка получения ID сохраненного сообщения: %v", err)
-		return
+		return msg, err
 	}
 
 	log.Printf("✅ Сообщение успешно сохранено в БД (ID: %d, Chat ID: %d, Статус: непрочитано)", lastID, chatID)
+
+	msg.ID = int(lastID)
+	return msg, nil
 }
 
 // Получение ID чата (создается, если не существует)
@@ -639,20 +620,56 @@ func (manager *Manager) HandleMessage(client *Client, messageData []byte) {
 	switch msg.Type {
 	case "message":
 		// Сохраняем сообщение в базу данных
-		manager.saveMessage(msg)
+		savedMsg, err := manager.saveMessage(msg)
+		if err != nil {
+			log.Printf("❌ Ошибка сохранения сообщения: %v", err)
 
-		// Отправляем сообщение получателю
+			// Отправляем уведомление об ошибке отправителю
+			errorMsg := Message{
+				Type:    "error",
+				Content: "Не удалось сохранить сообщение",
+			}
+
+			errorData, _ := json.Marshal(errorMsg)
+			client.Send <- errorData
+			return
+		}
+
+		// Добавляем ID сохраненного сообщения и другие возможные метаданные
+		// к оригинальному сообщению перед отправкой
+		msg.ID = savedMsg.ID // Предполагаем, что saveMessage возвращает сообщение с ID
+
+		// Создаем обновленное сообщение с ID и временной меткой
+		updatedMsg, err := json.Marshal(msg)
+		if err != nil {
+			log.Printf("❌ Ошибка сериализации сообщения: %v", err)
+			return
+		}
+
+		// Отправляем сообщение только получателю, если он онлайн
 		if recipient, ok := manager.Clients[msg.ToID]; ok {
 			select {
-			case recipient.Send <- messageData:
+			case recipient.Send <- updatedMsg:
+				log.Printf("✅ Сообщение доставлено получателю %d", msg.ToID)
 			default:
+				log.Printf("❌ Не удалось доставить сообщение получателю %d", msg.ToID)
 				close(recipient.Send)
 				delete(manager.Clients, recipient.ID)
 			}
+		} else {
+			log.Printf("ℹ️ Получатель %d не в сети, сообщение сохранено", msg.ToID)
 		}
 
-		// Отправляем копию отправителю для подтверждения
-		client.Send <- messageData
+		// Отправляем подтверждение отправителю (но не копию всего сообщения)
+		confirmMsg := Message{
+			Type:    "confirmation",
+			ID:      msg.ID, // ID сообщения для идентификации
+			Status:  "sent", // Статус "отправлено"
+			Content: "",     // Не дублируем контент
+		}
+
+		confirmData, _ := json.Marshal(confirmMsg)
+		client.Send <- confirmData
 
 	case "status":
 		// Создаем сообщение о статусе
@@ -718,14 +735,24 @@ func (manager *Manager) updateUserStatus(userID int, status string, isActive boo
 			Status: status,
 		}
 
-		// Добавляем информацию об активности
+		// Отправляем статус всем клиентам, кроме самого пользователя
 		if data, err := json.Marshal(statusMsg); err == nil {
-			manager.broadcast(data)
+			for clientID, client := range manager.Clients {
+				// Исключаем отправку статуса самому пользователю, чтобы избежать дублирования
+				if clientID != userID {
+					select {
+					case client.Send <- data:
+					default:
+						close(client.Send)
+						delete(manager.Clients, client.ID)
+					}
+				}
+			}
 		}
 	}
 }
 
-// Добавляем метод для проверки активности пользователей
+// checkUserActivity проверяет активность пользователей и обновляет их статусы
 func (manager *Manager) checkUserActivity() {
 	for {
 		time.Sleep(inactivityTimeout / 2) // Проверяем каждые 30 секунд
@@ -761,7 +788,7 @@ func (manager *Manager) checkUserActivity() {
 	}
 }
 
-// Обновляем HandleStatus для учета активности
+// HandleStatus обрабатывает HTTP запросы для обновления статуса пользователя
 func (manager *Manager) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -779,8 +806,20 @@ func (manager *Manager) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Обновляем статус с учетом активности
-	manager.updateUserStatus(msg.UserID, msg.Status, true)
+	// Обновляем статус с учетом активности через единый метод
+	manager.updateUserStatus(msg.UserID, msg.Status, msg.IsActive)
 
+	// Отправляем успешный ответ с подтверждением
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+
+	// Возвращаем информацию о выполненном действии
+	response := map[string]interface{}{
+		"success": true,
+		"message": "Status updated successfully",
+		"userId":  msg.UserID,
+		"status":  msg.Status,
+	}
+
+	json.NewEncoder(w).Encode(response)
 }
