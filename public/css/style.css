@@ -1,0 +1,350 @@
+/* Основные стили */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+body {
+    background-color: #f5f5f5;
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.chat-container {
+    width: 1200px;
+    height: 90vh;
+    background-color: white;
+    border-radius: 12px;
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+    display: flex;
+    overflow: hidden;
+}
+
+/* Стили для списка чатов (левая панель) */
+.chats-list {
+    width: 350px;
+    border-right: 1px solid #e0e0e0;
+    background-color: #f9f9f9;
+    display: flex;
+    flex-direction: column;
+}
+
+.chats-header {
+    padding: 20px;
+    border-bottom: 1px solid #e0e0e0;
+    background-color: #fff;
+}
+
+.chats-header h2 {
+    color: #333;
+    font-size: 1.2rem;
+}
+
+.chats-container {
+    flex: 1;
+    overflow-y: auto;
+}
+
+.chat-item {
+    display: flex;
+    padding: 15px;
+    border-bottom: 1px solid #e0e0e0;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    align-items: center;
+}
+
+.chat-item:hover {
+    background-color: #f0f0f0;
+}
+
+.chat-item.active {
+    background-color: #e6f7ff;
+}
+
+.chat-item-avatar {
+    position: relative;
+    margin-right: 15px;
+}
+
+.chat-item-avatar img {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.status-indicator {
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 2px solid white;
+}
+
+.status-online {
+    background-color: #4caf50;
+}
+
+.status-offline {
+    background-color: #9e9e9e;
+}
+
+.chat-item-info {
+    flex: 1;
+    overflow: hidden;
+    margin-right: 10px;
+}
+
+.chat-item-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 5px;
+}
+
+.chat-item-name {
+    font-size: 0.95rem;
+    color: #333;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.chat-item-time {
+    font-size: 0.7rem;
+    color: #999;
+}
+
+.chat-item-message {
+    font-size: 0.85rem;
+    color: #777;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.chat-item-product img {
+    width: 40px;
+    height: 40px;
+    border-radius: 6px;
+    object-fit: cover;
+}
+
+/* Стили для окна чата (правая панель) */
+.chat-window {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.chat-header {
+    padding: 15px 20px;
+    border-bottom: 1px solid #e0e0e0;
+    background-color: #fff;
+}
+
+.active-chat-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.seller-info {
+    display: flex;
+    align-items: center;
+}
+
+.seller-avatar {
+    position: relative;
+    margin-right: 15px;
+}
+
+.seller-avatar img {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.seller-details {
+    display: flex;
+    flex-direction: column;
+}
+
+.seller-name {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #333;
+}
+
+.seller-status {
+    font-size: 0.8rem;
+    color: #777;
+}
+
+.product-info {
+    display: flex;
+    align-items: center;
+}
+
+.product-image img {
+    width: 40px;
+    height: 40px;
+    border-radius: 6px;
+    object-fit: cover;
+    margin-right: 10px;
+}
+
+.product-name {
+    font-size: 0.9rem;
+    color: #333;
+}
+
+.empty-chat-message {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100%;
+}
+
+.empty-chat-message h3 {
+    color: #999;
+    font-weight: normal;
+}
+
+.chat-messages {
+    flex: 1;
+    padding: 20px;
+    overflow-y: auto;
+    background-color: #f5f5f5;
+    display: flex;
+    flex-direction: column;
+}
+
+.message {
+    max-width: 70%;
+    margin-bottom: 15px;
+    display: flex;
+    flex-direction: column;
+}
+
+.message-outgoing {
+    align-self: flex-end;
+}
+
+.message-incoming {
+    align-self: flex-start;
+}
+
+.message-content {
+    padding: 12px 15px;
+    border-radius: 18px;
+    font-size: 0.95rem;
+    word-break: break-word;
+}
+
+.message-outgoing .message-content {
+    background-color: #007bff;
+    color: white;
+    border-bottom-right-radius: 4px;
+}
+
+.message-incoming .message-content {
+    background-color: white;
+    color: #333;
+    border-bottom-left-radius: 4px;
+}
+
+.message-time {
+    font-size: 0.7rem;
+    color: #999;
+    margin-top: 4px;
+    align-self: flex-end;
+}
+
+.message-outgoing .message-time {
+    padding-right: 5px;
+}
+
+.message-incoming .message-time {
+    align-self: flex-start;
+    padding-left: 5px;
+}
+
+.chat-input-container {
+    padding: 15px;
+    border-top: 1px solid #e0e0e0;
+    display: flex;
+    background-color: white;
+}
+
+#message-input {
+    flex: 1;
+    padding: 12px 15px;
+    border: 1px solid #e0e0e0;
+    border-radius: 24px;
+    resize: none;
+    font-size: 0.95rem;
+    height: 50px;
+    max-height: 120px;
+    margin-right: 10px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+#message-input:focus {
+    border-color: #007bff;
+}
+
+#send-button {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+#send-button:hover {
+    background-color: #0069d9;
+}
+
+#send-button:disabled {
+    background-color: #cccccc;
+    cursor: not-allowed;
+}
+
+/* Адаптивная верстка */
+@media (max-width: 1200px) {
+    .chat-container {
+        width: 95%;
+    }
+}
+
+@media (max-width: 768px) {
+    .chat-container {
+        flex-direction: column;
+        height: 95vh;
+    }
+    
+    .chats-list {
+        width: 100%;
+        height: 30%;
+    }
+    
+    .chat-window {
+        height: 70%;
+    }
+} 

@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Чат магазина</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.2.0/css/all.min.css">
+</head>
+<body>
+    <div class="chat-container">
+        <!-- Левая панель: список чатов -->
+        <div class="chats-list">
+            <div class="chats-header">
+                <h2>Чаты</h2>
+            </div>
+            <div class="chats-container" id="chats-container">
+                <!-- Чаты будут добавлены динамически через JavaScript -->
+            </div>
+        </div>
+        
+        <!-- Правая панель: активный чат -->
+        <div class="chat-window">
+            <div class="chat-header" id="chat-header">
+                <!-- Информация о выбранном чате будет добавлена через JavaScript -->
+                <div class="empty-chat-message">
+                    <h3>Выберите чат для начала общения</h3>
+                </div>
+            </div>
+            <div class="chat-messages" id="chat-messages">
+                <!-- Сообщения будут добавлены динамически через JavaScript -->
+            </div>
+            <div class="chat-input-container">
+                <textarea id="message-input" placeholder="Введите сообщение..." disabled></textarea>
+                <button id="send-button" disabled>
+                    <i class="fas fa-paper-plane"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Шаблоны для JavaScript -->
+    <template id="chat-item-template">
+        <div class="chat-item" data-chat-id="" data-product-id="" data-seller-id="" data-buyer-id="">
+            <div class="chat-item-avatar">
+                <img src="" alt="Аватар">
+                <span class="status-indicator"></span>
+            </div>
+            <div class="chat-item-info">
+                <div class="chat-item-header">
+                    <h3 class="chat-item-name"></h3>
+                    <span class="chat-item-time"></span>
+                </div>
+                <div class="chat-item-message"></div>
+            </div>
+            <div class="chat-item-product">
+                <img src="" alt="Товар">
+            </div>
+        </div>
+    </template>
+
+    <template id="message-template">
+        <div class="message">
+            <div class="message-content"></div>
+            <div class="message-time"></div>
+        </div>
+    </template>
+
+    <template id="active-chat-header-template">
+        <div class="active-chat-header">
+            <div class="seller-info">
+                <div class="seller-avatar">
+                    <img src="" alt="Аватар продавца">
+                    <span class="status-indicator"></span>
+                </div>
+                <div class="seller-details">
+                    <h3 class="seller-name"></h3>
+                    <span class="seller-status"></span>
+                </div>
+            </div>
+            <div class="product-info">
+                <div class="product-image">
+                    <img src="" alt="Изображение товара">
+                </div>
+                <div class="product-details">
+                    <h4 class="product-name"></h4>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <script src="js/config.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/chat.js"></script>
+</body>
+</html> 
