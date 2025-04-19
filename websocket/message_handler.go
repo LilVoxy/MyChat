@@ -2,128 +2,186 @@
 package websocket
 
 import (
+	"database/sql"
 	"encoding/json"
 	"log"
+	"time"
 )
 
 // HandleMessage обрабатывает входящие сообщения
-func (manager *Manager) HandleMessage(client *Client, messageData []byte) {
+func (m *Manager) HandleMessage(message []byte, client *Client) {
+	// Парсим сообщение
 	var msg Message
-	if err := json.Unmarshal(messageData, &msg); err != nil {
-		log.Printf("Ошибка разбора JSON: %v", err)
+	if err := json.Unmarshal(message, &msg); err != nil {
+		log.Printf("❌ Ошибка разбора сообщения: %v", err)
 		return
 	}
 
-	switch msg.Type {
-	case "message":
-		// Сохраняем сообщение в базу данных
-		savedMsg, err := manager.saveMessage(msg)
+	// Проверяем тип сообщения
+	if msg.Type != "message" {
+		log.Printf("❌ Неверный тип сообщения: %s", msg.Type)
+		return
+	}
+
+	// Проверяем обязательные поля
+	if msg.FromID == 0 || msg.ToID == 0 || msg.Content == "" {
+		log.Printf("❌ Отсутствуют обязательные поля сообщения")
+		return
+	}
+
+	// Устанавливаем текущее время, если не указано
+	if msg.Timestamp == "" {
+		msg.Timestamp = time.Now().Format("15:04")
+	}
+
+	// Сохраняем сообщение в базу данных
+	chatID := msg.ChatID // Используем chat_id из сообщения, если он есть
+	if chatID == 0 {
+		// Если chat_id не указан, ищем или создаем чат
+		var err error
+		chatID, err = m.findOrCreateChat(msg.FromID, msg.ToID, msg.ProductID)
 		if err != nil {
-			log.Printf("❌ Ошибка сохранения сообщения: %v", err)
-
-			// Отправляем уведомление об ошибке отправителю
-			errorMsg := Message{
-				Type:    "error",
-				Content: "Не удалось сохранить сообщение",
-			}
-
-			errorData, _ := json.Marshal(errorMsg)
-			client.Send <- errorData
+			log.Printf("❌ Ошибка при поиске/создании чата: %v", err)
 			return
 		}
+	}
 
-		// Добавляем ID сохраненного сообщения и другие возможные метаданные
-		// к оригинальному сообщению перед отправкой
-		msg.ID = savedMsg.ID // Предполагаем, что saveMessage возвращает сообщение с ID
+	// Добавляем chatId к сообщению для клиента
+	msg.ChatID = chatID
 
-		// Создаем обновленное сообщение с ID и временной меткой
-		updatedMsg, err := json.Marshal(msg)
-		if err != nil {
-			log.Printf("❌ Ошибка сериализации сообщения: %v", err)
-			return
+	// Сохраняем сообщение в базу данных
+	msgID, err := m.saveMessage(chatID, msg.FromID, msg.Content)
+	if err != nil {
+		log.Printf("❌ Ошибка при сохранении сообщения: %v", err)
+		return
+	}
+
+	// Устанавливаем ID сообщения
+	msg.ID = msgID
+
+	// Отправляем сообщение получателю и отправителю
+	m.sendMessageToClients(msg)
+
+	// Обновляем последнее сообщение в чате
+	go m.updateLastMessage(chatID, msg.Content)
+}
+
+// Находит существующий чат или создает новый
+func (m *Manager) findOrCreateChat(fromID, toID, productID int) (int, error) {
+	// Ищем существующий чат
+	var chatID int
+	err := m.DB.QueryRow(`
+		SELECT id FROM chats
+		WHERE ((buyer_id = ? AND seller_id = ?) OR (buyer_id = ? AND seller_id = ?))
+		AND product_id = ?
+		LIMIT 1
+	`, fromID, toID, toID, fromID, productID).Scan(&chatID)
+
+	if err == nil {
+		// Чат найден, возвращаем его ID
+		return chatID, nil
+	}
+
+	if err != sql.ErrNoRows {
+		// Произошла ошибка при поиске
+		return 0, err
+	}
+
+	// Определяем, кто покупатель, а кто продавец
+	// В реальном приложении может быть сложная логика
+	// Для упрощения считаем, что меньший ID - это продавец
+	var buyerID, sellerID int
+	if fromID < toID {
+		sellerID = fromID
+		buyerID = toID
+	} else {
+		sellerID = toID
+		buyerID = fromID
+	}
+
+	// Создаем новый чат
+	result, err := m.DB.Exec(`
+		INSERT INTO chats (buyer_id, seller_id, product_id, created_at)
+		VALUES (?, ?, ?, NOW())
+	`, buyerID, sellerID, productID)
+
+	if err != nil {
+		return 0, err
+	}
+
+	// Получаем ID нового чата
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+
+	log.Printf("✅ Создан новый чат ID: %d между покупателем %d и продавцом %d для товара %d",
+		id, buyerID, sellerID, productID)
+
+	return int(id), nil
+}
+
+// Сохраняет сообщение в базу данных
+func (m *Manager) saveMessage(chatID, fromID int, content string) (int, error) {
+	result, err := m.DB.Exec(`
+		INSERT INTO messages (chat_id, sender_id, message, created_at, read_status)
+		VALUES (?, ?, ?, NOW(), FALSE)
+	`, chatID, fromID, content)
+
+	if err != nil {
+		return 0, err
+	}
+
+	// Получаем ID нового сообщения
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+
+	log.Printf("✅ Сохранено сообщение ID: %d в чат ID: %d от пользователя %d: %s",
+		id, chatID, fromID, content)
+
+	return int(id), nil
+}
+
+// Отправляет сообщение клиентам через WebSocket
+func (m *Manager) sendMessageToClients(msg Message) {
+	// Сериализуем сообщение в JSON
+	messageJSON, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("❌ Ошибка при сериализации сообщения: %v", err)
+		return
+	}
+
+	// Отправляем получателю
+	if client, ok := m.Clients[msg.ToID]; ok {
+		client.Send <- messageJSON
+		log.Printf("✅ Сообщение отправлено получателю: %d", msg.ToID)
+	} else {
+		log.Printf("⚠️ Получатель %d не в сети", msg.ToID)
+	}
+
+	// Отправляем отправителю (для синхронизации между устройствами)
+	if msg.FromID != msg.ToID { // Избегаем дублирования для сообщений самому себе
+		if client, ok := m.Clients[msg.FromID]; ok {
+			client.Send <- messageJSON
+			log.Printf("✅ Сообщение отправлено отправителю: %d (для синхронизации)", msg.FromID)
 		}
-
-		// Отправляем сообщение только получателю, если он онлайн
-		if recipient, ok := manager.Clients[msg.ToID]; ok {
-			select {
-			case recipient.Send <- updatedMsg:
-				log.Printf("✅ Сообщение доставлено получателю %d", msg.ToID)
-			default:
-				log.Printf("❌ Не удалось доставить сообщение получателю %d", msg.ToID)
-				close(recipient.Send)
-				delete(manager.Clients, recipient.ID)
-			}
-		} else {
-			log.Printf("ℹ️ Получатель %d не в сети, сообщение сохранено", msg.ToID)
-		}
-
-		// Отправляем подтверждение отправителю (но не копию всего сообщения)
-		confirmMsg := Message{
-			Type:    "confirmation",
-			ID:      msg.ID, // ID сообщения для идентификации
-			Status:  "sent", // Статус "отправлено"
-			Content: "",     // Не дублируем контент
-		}
-
-		confirmData, _ := json.Marshal(confirmMsg)
-		client.Send <- confirmData
-
-	case "status":
-		// Создаем сообщение о статусе
-		statusMsg := Message{
-			Type:   "status",
-			UserID: msg.UserID,
-			Status: msg.Status,
-		}
-
-		// Сериализуем сообщение
-		statusData, err := json.Marshal(statusMsg)
-		if err != nil {
-			log.Printf("Ошибка сериализации статуса: %v", err)
-			return
-		}
-
-		// Отправляем статус всем подключенным клиентам
-		manager.broadcast(statusData)
 	}
 }
 
-// saveMessage сохраняет сообщение в базе данных
-func (manager *Manager) saveMessage(msg Message) (Message, error) {
-	// Получаем или создаем ID чата
-	chatID, err := manager.getChatID(msg.FromID, msg.ToID, msg.ProductID)
+// Обновляет последнее сообщение в чате
+func (m *Manager) updateLastMessage(chatID int, message string) {
+	_, err := m.DB.Exec(`
+		UPDATE chats
+		SET last_message = ?, last_message_time = NOW()
+		WHERE id = ?
+	`, message, chatID)
+
 	if err != nil {
-		log.Printf("❌ Ошибка получения ID чата: %v", err)
-		return msg, err
+		log.Printf("❌ Ошибка при обновлении последнего сообщения в чате: %v", err)
+		return
 	}
 
-	// Подготовка запроса для вставки сообщения
-	stmt, err := manager.DB.Prepare(`
-		INSERT INTO messages (chat_id, sender_id, message, created_at, read_status)
-		VALUES (?, ?, ?, NOW(), FALSE)
-	`)
-	if err != nil {
-		log.Printf("❌ Ошибка подготовки запроса для сохранения сообщения: %v", err)
-		return msg, err
-	}
-	defer stmt.Close()
-
-	// Выполнение запроса
-	result, err := stmt.Exec(chatID, msg.FromID, msg.Content)
-	if err != nil {
-		log.Printf("❌ Ошибка выполнения запроса для сохранения сообщения: %v", err)
-		return msg, err
-	}
-
-	// Получение ID вставленной записи
-	lastID, err := result.LastInsertId()
-	if err != nil {
-		log.Printf("❌ Ошибка получения ID сохраненного сообщения: %v", err)
-		return msg, err
-	}
-
-	log.Printf("✅ Сообщение успешно сохранено в БД (ID: %d, Chat ID: %d, Статус: непрочитано)", lastID, chatID)
-
-	msg.ID = int(lastID)
-	return msg, nil
+	log.Printf("✅ Обновлено последнее сообщение в чате ID: %d", chatID)
 }

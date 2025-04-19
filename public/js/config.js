@@ -19,9 +19,9 @@ const CONFIG = {
     DEFAULT_AVATAR: 'images/default-avatar.png',
     DEFAULT_PRODUCT_IMAGE: 'images/default-product.png',
     
-    // ID текущего пользователя (должен быть установлен после авторизации)
-    // В реальном приложении это должно быть получено из механизма авторизации
-    CURRENT_USER_ID: 1 // Временное решение для демонстрации
+    // ID текущего пользователя (может быть изменен через интерфейс)
+    // По умолчанию используем пользователя 1, но можно изменить через localStorage
+    CURRENT_USER_ID: parseInt(localStorage.getItem('currentUserId') || '1')
 };
 
 // Режим отладки
@@ -30,6 +30,6 @@ const DEBUG = true;
 // Функция для вывода отладочных сообщений
 function log(...args) {
     if (DEBUG) {
-        console.log(...args);
+        console.log(`[User ${CONFIG.CURRENT_USER_ID}]`, ...args);
     }
 } 

@@ -41,6 +41,9 @@ class ChatApp {
     async init() {
         log('Инициализация приложения чата');
         
+        // Обновляем заголовок для отображения ID текущего пользователя
+        document.title = `Чат магазина (Пользователь ID: ${this.currentUser})`;
+        
         // Установка обработчиков событий для элементов формы
         this.sendButton.addEventListener('click', this.onSendButtonClick);
         this.messageInput.addEventListener('keydown', this.onMessageInputKeydown);
@@ -73,33 +76,46 @@ class ChatApp {
     
     // Загрузка списка чатов
     async loadChats() {
-        try {
-            const chats = await API.getChats();
-            if (chats && chats.length > 0) {
-                this.chats = chats;
-                this.renderChats();
-                
-                // Если есть активный чат, обновляем его данные
-                if (this.activeChat) {
-                    const updatedChat = this.chats.find(chat => 
-                        (chat.buyerId === this.activeChat.buyerId && chat.sellerId === this.activeChat.sellerId) ||
-                        (chat.buyerId === this.activeChat.sellerId && chat.sellerId === this.activeChat.buyerId)
-                    );
-                    
-                    if (updatedChat) {
-                        this.activeChat = updatedChat;
-                    }
-                }
-            } else {
-                log('Чаты не найдены или список пуст');
-            }
-        } catch (error) {
-            log('Ошибка при загрузке чатов:', error);
+        // Добавляем механизм дебаунсинга через таймер
+        if (this._loadChatsTimeout) {
+            clearTimeout(this._loadChatsTimeout);
         }
+        
+        this._loadChatsTimeout = setTimeout(async () => {
+            try {
+                const chats = await API.getChats();
+                if (chats && chats.length > 0) {
+                    this.chats = chats;
+                    this.renderChats();
+                    
+                    // Если есть активный чат, обновляем его данные
+                    if (this.activeChat) {
+                        const updatedChat = this.chats.find(chat => chat.id === this.activeChat.id);
+                        
+                        if (updatedChat) {
+                            this.activeChat = updatedChat;
+                        }
+                    }
+                } else {
+                    log('Чаты не найдены или список пуст');
+                }
+            } catch (error) {
+                log('Ошибка при загрузке чатов:', error);
+            }
+        }, 300); // Добавляем небольшую задержку для дебаунсинга
     }
     
     // Отображение списка чатов
     async renderChats() {
+        // Если список чатов не изменился, пропускаем перерисовку
+        if (this._lastRenderedChats && 
+            JSON.stringify(this._lastRenderedChats) === JSON.stringify(this.chats)) {
+            return;
+        }
+        
+        // Сохраняем последнее отрисованное состояние
+        this._lastRenderedChats = [...this.chats];
+        
         // Очищаем контейнер
         this.chatsList.innerHTML = '';
         
@@ -136,6 +152,9 @@ class ChatApp {
             // Устанавливаем доступные данные
             time.textContent = chat.lastMessageTime;
             message.textContent = chat.lastMessage || 'Нет сообщений';
+            
+            // Добавляем информацию о chat_id
+            message.title = `Chat ID: ${chat.id}`;
             
             // Загружаем и устанавливаем данные о пользователе
             let userInfo = this.userInfoCache[otherUserId];
@@ -198,6 +217,8 @@ class ChatApp {
         if (this.activeChat && this.activeChat.id === chat.id) {
             return;
         }
+        
+        log(`Переключение на чат ID: ${chat.id}, собеседник ID: ${otherUserId}`);
         
         // Обновляем активный чат
         this.activeChat = chat;
@@ -276,6 +297,17 @@ class ChatApp {
         productImage.src = productInfo?.image || CONFIG.DEFAULT_PRODUCT_IMAGE;
         productImage.alt = productInfo?.name || `Товар ${chat.productId}`;
         
+        // Добавляем информацию о chat_id
+        const chatIdInfo = document.createElement('div');
+        chatIdInfo.className = 'chat-id-info';
+        chatIdInfo.textContent = `Chat ID: ${chat.id}`;
+        chatIdInfo.style.fontSize = '0.8rem';
+        chatIdInfo.style.color = '#999';
+        chatIdInfo.style.marginLeft = '10px';
+        
+        const productDetails = headerElement.querySelector('.product-details');
+        productDetails.appendChild(chatIdInfo);
+        
         // Добавляем заголовок в DOM
         this.chatHeader.appendChild(headerElement);
         
@@ -290,16 +322,40 @@ class ChatApp {
         }
         
         try {
+            // Получаем сообщения с сервера
             const messages = await API.getMessages(otherUserId);
             
             // Очищаем область сообщений
             this.chatMessages.innerHTML = '';
             
+            // Активный чат
+            const activeChatId = this.activeChat.id;
+            log(`Загрузка сообщений для чата ID: ${activeChatId}, собеседник ID: ${otherUserId}`);
+            
+            // Получаем все чаты между текущим пользователем и собеседником
+            const chatIds = this.getChatsForUsers(this.currentUser, otherUserId);
+            
             // Подготавливаем фрагмент для вставки
             const fragment = document.createDocumentFragment();
             
-            // Добавляем все сообщения
-            for (const msg of messages) {
+            // Обрабатываем все сообщения из текущего активного чата
+            // На бэкенде сообщения уже отфильтрованы по пользователям, но нам нужно 
+            // убедиться, что мы показываем только сообщения из активного чата
+            const filteredMessages = messages.filter(msg => {
+                // Добавляем chat_id к сообщению, если его нет
+                if (msg.chatId === undefined) {
+                    msg.chatId = activeChatId;
+                }
+                
+                // Проверяем, что сообщение относится к активному чату
+                // При этом нам не важно, кто отправитель - мы показываем все сообщения чата
+                return this.isMessageBelongsToChat(msg, activeChatId);
+            });
+            
+            log(`Отфильтровано ${filteredMessages.length} из ${messages.length} сообщений для чата ID: ${activeChatId}`);
+            
+            // Добавляем все сообщения в интерфейс
+            for (const msg of filteredMessages) {
                 const messageElement = this.createMessageElement(msg);
                 fragment.appendChild(messageElement);
             }
@@ -315,6 +371,43 @@ class ChatApp {
         } catch (error) {
             log('Ошибка при загрузке сообщений:', error);
         }
+    }
+    
+    // Проверяет, принадлежит ли сообщение к указанному чату
+    isMessageBelongsToChat(message, chatId) {
+        // Если у сообщения есть chatId, просто сравниваем
+        if (message.chatId !== undefined) {
+            return message.chatId === chatId;
+        }
+        
+        // В противном случае, считаем, что сообщение относится к активному чату,
+        // если оно между пользователями в текущем чате
+        if (this.activeChat) {
+            // Проверяем, что сообщение между пользователями активного чата
+            // (неважно, кто отправитель, а кто получатель)
+            const isSameUsers = 
+                (message.fromId === this.activeChat.buyerId || message.fromId === this.activeChat.sellerId) &&
+                (message.toId === this.activeChat.buyerId || message.toId === this.activeChat.sellerId);
+            
+            // Если есть productId в сообщении, также проверяем его
+            if (message.productId !== undefined) {
+                return isSameUsers && message.productId === this.activeChat.productId;
+            }
+            
+            return isSameUsers;
+        }
+        
+        return false;
+    }
+    
+    // Получает список ID чатов для двух пользователей
+    getChatsForUsers(userId1, userId2) {
+        return this.chats
+            .filter(chat => 
+                (chat.buyerId === userId1 && chat.sellerId === userId2) || 
+                (chat.buyerId === userId2 && chat.sellerId === userId1)
+            )
+            .map(chat => chat.id);
     }
     
     // Создание элемента сообщения
@@ -337,17 +430,32 @@ class ChatApp {
         content.textContent = message.content;
         time.textContent = message.timestamp;
         
+        // Добавляем title для отладки
+        messageElement.title = `ID: ${message.id}, From: ${message.fromId}, To: ${message.toId}`;
+        
         return messageElement;
     }
     
     // Добавление нового сообщения в интерфейс
     addMessage(message) {
-        // Проверяем, соответствует ли сообщение активному чату
-        const isCurrentChat = this.activeChat && 
-            ((message.fromId === this.currentUser && message.toId === this.getActiveInterlocutorId()) || 
-             (message.fromId === this.getActiveInterlocutorId() && message.toId === this.currentUser));
+        // Если нет активного чата, обновляем список чатов и выходим
+        if (!this.activeChat) {
+            this.loadChats();
+            return;
+        }
         
-        if (isCurrentChat) {
+        // Проверяем, соответствует ли сообщение активному чату
+        // Сообщение соответствует активному чату, если:
+        // 1. Отправитель или получатель - текущий пользователь
+        // 2. Отправитель или получатель - собеседник активного чата
+        // 3. Сообщение принадлежит активному чату
+        const interlocutorId = this.getActiveInterlocutorId();
+        const isMessageFromCurrentChat = 
+            ((message.fromId === this.currentUser || message.toId === this.currentUser) &&
+             (message.fromId === interlocutorId || message.toId === interlocutorId)) &&
+            this.isMessageBelongsToChat(message, this.activeChat.id);
+        
+        if (isMessageFromCurrentChat) {
             // Создаем и добавляем элемент сообщения
             const messageElement = this.createMessageElement(message);
             this.chatMessages.appendChild(messageElement);
@@ -358,8 +466,11 @@ class ChatApp {
             }, CONFIG.SCROLL_DELAY);
         }
         
-        // Обновляем список чатов
-        this.loadChats();
+        // Обновляем список чатов только если сообщение не предназначено для текущего чата
+        // или если сообщение пришло от другого пользователя
+        if (!isMessageFromCurrentChat || message.fromId !== this.currentUser) {
+            this.loadChats();
+        }
     }
     
     // Получение ID собеседника в активном чате
@@ -382,24 +493,15 @@ class ChatApp {
         const content = this.messageInput.value.trim();
         const toUserId = this.getActiveInterlocutorId();
         
-        // Отправляем сообщение через WebSocket
-        const success = chatSocket.sendMessage(toUserId, content, this.activeChat.productId);
+        // Отправляем сообщение через WebSocket с указанием chat_id
+        const success = chatSocket.sendMessage(toUserId, content, this.activeChat.productId, this.activeChat.id);
         
         if (success) {
             // Очищаем поле ввода
             this.messageInput.value = '';
             
-            // Создаем объект сообщения для локального добавления
-            const message = {
-                fromId: this.currentUser,
-                toId: toUserId,
-                productId: this.activeChat.productId,
-                content: content,
-                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-            };
-            
-            // Добавляем сообщение в интерфейс
-            this.addMessage(message);
+            // Не добавляем сообщение локально - оно придет через WebSocket
+            // и будет добавлено в обработчике onMessage
         }
     }
     
@@ -414,11 +516,12 @@ class ChatApp {
             message.timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         }
         
+        log(`Получено новое сообщение: ${JSON.stringify(message)}`);
+        
         // Добавляем сообщение в интерфейс
         this.addMessage(message);
         
-        // Обновляем список чатов
-        this.loadChats();
+        // Не вызываем loadChats здесь, так как это делается в addMessage
     }
     
     // Обработчик события изменения статуса пользователя

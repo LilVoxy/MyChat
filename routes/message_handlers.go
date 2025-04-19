@@ -13,6 +13,7 @@ import (
 // Message структура для сообщений
 type Message struct {
 	ID        int       `json:"id"`
+	ChatID    int       `json:"chatId"`
 	FromID    int       `json:"fromId"`
 	ToID      int       `json:"toId"`
 	ProductID int       `json:"productId"`
@@ -64,7 +65,7 @@ func GetMessagesHandler(db *sql.DB) http.HandlerFunc {
 
 		// Получаем сообщения из базы данных
 		rows, err := db.Query(`
-			SELECT m.id, m.sender_id as from_id, 
+			SELECT m.id, m.chat_id, m.sender_id as from_id, 
 				   CASE 
 					   WHEN m.sender_id = ? THEN ? 
 					   ELSE m.sender_id 
@@ -96,7 +97,7 @@ func GetMessagesHandler(db *sql.DB) http.HandlerFunc {
 			var createdAt time.Time
 
 			// Сканируем данные строки
-			err := rows.Scan(&msg.ID, &msg.FromID, &msg.ToID, &msg.ProductID, &msg.Content, &createdAt)
+			err := rows.Scan(&msg.ID, &msg.ChatID, &msg.FromID, &msg.ToID, &msg.ProductID, &msg.Content, &createdAt)
 			if err != nil {
 				log.Printf("❌ Ошибка при сканировании сообщения: %v", err)
 				continue

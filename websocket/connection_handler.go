@@ -37,9 +37,13 @@ func (manager *Manager) HandleConnections(w http.ResponseWriter, r *http.Request
 
 	// Создаем нового клиента
 	client := &Client{
-		ID:     userId,
-		Socket: conn,
-		Send:   make(chan []byte, 256),
+		ID:           userId,
+		UserID:       userId,
+		Socket:       conn,
+		Conn:         conn,
+		Send:         make(chan []byte, 256),
+		Manager:      manager,
+		LastActivity: time.Now(),
 	}
 
 	// Если клиент с таким ID уже существует, отключаем его
@@ -97,6 +101,6 @@ func (manager *Manager) HandleConnections(w http.ResponseWriter, r *http.Request
 	manager.statusMutex.RUnlock()
 
 	// Запускаем горутины для чтения и отправки сообщений
-	go client.readPump(manager)
+	go client.readPump()
 	go client.writePump()
 }

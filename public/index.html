@@ -6,8 +6,61 @@
     <title>Чат магазина</title>
     <link rel="stylesheet" href="css/style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.2.0/css/all.min.css">
+    <style>
+        .user-switcher {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: white;
+            border-radius: 5px;
+            padding: 5px 10px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            z-index: 1000;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .user-switcher select, .user-switcher button {
+            padding: 5px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+        .user-switcher button {
+            background: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        .debug-info {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            z-index: 1000;
+        }
+    </style>
 </head>
 <body>
+    <!-- Переключатель пользователей для тестирования -->
+    <div class="user-switcher">
+        <label for="user-select">Пользователь:</label>
+        <select id="user-select">
+            <option value="1">Пользователь 1</option>
+            <option value="2">Пользователь 2</option>
+            <option value="3">Пользователь 3</option>
+        </select>
+        <button id="switch-user-btn">Сменить</button>
+    </div>
+
+    <!-- Информация для отладки -->
+    <div class="debug-info" id="debug-info">
+        Текущий пользователь: ID <span id="current-user-id">1</span>
+    </div>
+
     <div class="chat-container">
         <!-- Левая панель: список чатов -->
         <div class="chats-list">
@@ -92,5 +145,36 @@
     <script src="js/config.js"></script>
     <script src="js/api.js"></script>
     <script src="js/chat.js"></script>
+    
+    <script>
+        // Код для смены пользователя (для тестирования)
+        document.addEventListener('DOMContentLoaded', () => {
+            const userSelect = document.getElementById('user-select');
+            const switchUserBtn = document.getElementById('switch-user-btn');
+            const currentUserIdEl = document.getElementById('current-user-id');
+            
+            // Устанавливаем начальное значение
+            userSelect.value = CONFIG.CURRENT_USER_ID;
+            currentUserIdEl.textContent = CONFIG.CURRENT_USER_ID;
+            
+            // Обработчик нажатия на кнопку смены пользователя
+            switchUserBtn.addEventListener('click', () => {
+                const newUserId = parseInt(userSelect.value);
+                if (newUserId !== CONFIG.CURRENT_USER_ID) {
+                    // Меняем ID пользователя и перезагружаем страницу
+                    localStorage.setItem('currentUserId', newUserId);
+                    window.location.reload();
+                }
+            });
+            
+            // Установка ID пользователя из localStorage (если есть)
+            const savedUserId = localStorage.getItem('currentUserId');
+            if (savedUserId) {
+                CONFIG.CURRENT_USER_ID = parseInt(savedUserId);
+                userSelect.value = CONFIG.CURRENT_USER_ID;
+                currentUserIdEl.textContent = CONFIG.CURRENT_USER_ID;
+            }
+        });
+    </script>
 </body>
 </html> 

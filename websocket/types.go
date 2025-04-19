@@ -16,18 +16,24 @@ type Message struct {
 	FromID    int    `json:"fromId,omitempty"`
 	ToID      int    `json:"toId,omitempty"`
 	ProductID int    `json:"productId,omitempty"`
+	ChatID    int    `json:"chatId,omitempty"` // ID чата, к которому относится сообщение
 	Content   string `json:"content,omitempty"`
 	UserID    int    `json:"userId,omitempty"`
 	Status    string `json:"status,omitempty"`
 	IsActive  bool   `json:"isActive,omitempty"`
 	ID        int    `json:"id,omitempty"`
+	Timestamp string `json:"timestamp,omitempty"` // Время отправки сообщения
 }
 
 // Клиент WebSocket
 type Client struct {
-	ID     int
-	Socket *websocket.Conn
-	Send   chan []byte
+	ID           int
+	UserID       int // ID пользователя
+	Socket       *websocket.Conn
+	Conn         *websocket.Conn // Псевдоним для Socket для совместимости
+	Send         chan []byte
+	Manager      *Manager  // Ссылка на менеджер
+	LastActivity time.Time // Время последней активности
 }
 
 // Добавляем структуру для хранения статусов пользователей

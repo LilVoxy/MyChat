@@ -9,82 +9,68 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// readPump обрабатывает чтение сообщений от клиента
-func (c *Client) readPump(manager *Manager) {
+// readPump читает сообщения от клиента и обрабатывает их
+func (c *Client) readPump() {
+	// Откладываем закрытие до конца функции
 	defer func() {
-		// Обработка паники при закрытии канала
-		if r := recover(); r != nil {
-			log.Printf("Паника при чтении сообщений клиента %d: %v", c.ID, r)
-		}
-
-		// Обновляем статус при отключении
-		manager.statusMutex.Lock()
-		if status, exists := manager.UserStatuses[c.ID]; exists {
-			status.Connected = false
-			status.LastSeen = time.Now()
-		}
-		manager.statusMutex.Unlock()
-
-		manager.updateUserStatus(c.ID, "offline", false)
-		log.Printf("❌ Пользователь %d отключился", c.ID)
-
-		// Отправляем сигнал отключения
-		manager.Unregister <- c
-
-		// Безопасно закрываем соединение
-		c.Socket.Close()
-
-		log.Printf("Завершение readPump для клиента %d", c.ID)
+		c.Manager.Unregister <- c
+		c.Conn.Close()
+		log.Printf("WebSocket закрыт для пользователя ID: %d", c.UserID)
 	}()
 
-	// Устанавливаем параметры подключения
-	c.Socket.SetReadLimit(maxMessageSize)
-	c.Socket.SetReadDeadline(time.Now().Add(pongWait))
-	c.Socket.SetPongHandler(func(string) error {
-		c.Socket.SetReadDeadline(time.Now().Add(pongWait))
+	// Настраиваем соединение
+	c.Conn.SetReadLimit(maxMessageSize)
+	c.Conn.SetReadDeadline(time.Now().Add(pongWait))
+	c.Conn.SetPongHandler(func(string) error {
+		c.Conn.SetReadDeadline(time.Now().Add(pongWait))
 		return nil
 	})
 
+	// Бесконечный цикл чтения сообщений от клиента
 	for {
-		// Читаем сообщения
-		_, message, err := c.Socket.ReadMessage()
+		_, message, err := c.Conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("Ошибка: %v", err)
+				log.Printf("WebSocket закрыт неожиданно: %v", err)
 			}
 			break
 		}
 
-		// Обрабатываем полученное сообщение
-		var msg Message
-		if err := json.Unmarshal(message, &msg); err != nil {
-			log.Println("Ошибка декодирования сообщения:", err)
+		// Обновляем время последней активности
+		c.LastActivity = time.Now()
+
+		// Парсим сообщение для определения типа
+		var data struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(message, &data); err != nil {
+			log.Printf("Ошибка при разборе сообщения: %v", err)
 			continue
 		}
 
-		// Устанавливаем ID отправителя из данных соединения
-		msg.FromID = c.ID
-
-		switch msg.Type {
+		// Обрабатываем разные типы сообщений
+		switch data.Type {
 		case "ping":
-			// Отправляем понг-сообщение обратно клиенту
-			pongMsg := Message{
-				Type: "pong",
-			}
-			if pongData, err := json.Marshal(pongMsg); err == nil {
-				c.Send <- pongData
-			}
-			continue
+			// Просто обновляем время активности
+			log.Printf("Получен пинг от пользователя ID: %d", c.UserID)
 
 		case "message":
-			// Делегируем обработку сообщения HandleMessage
-			manager.HandleMessage(c, message)
-			continue
+			// Вызываем обработчик сообщений из Manager
+			c.Manager.HandleMessage(message, c)
 
 		case "status":
-			// Обрабатываем сообщение о статусе
-			manager.updateUserStatus(c.ID, msg.Status, msg.IsActive)
-			log.Printf("Обновлен статус %s для пользователя %d", msg.Status, c.ID)
+			// Обрабатываем запрос на изменение статуса
+			var statusData struct {
+				Type   string `json:"type"`
+				Status string `json:"status"`
+			}
+			if err := json.Unmarshal(message, &statusData); err != nil {
+				log.Printf("Ошибка при разборе сообщения статуса: %v", err)
+				continue
+			}
+
+			// Обновляем статус пользователя
+			c.Manager.updateUserStatus(c.UserID, statusData.Status, true)
 		}
 	}
 }

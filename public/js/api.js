@@ -146,7 +146,7 @@ class ChatSocket {
     }
 
     // Отправка сообщения через WebSocket
-    sendMessage(to, content, productId) {
+    sendMessage(to, content, productId, chatId) {
         if (!this.connected || !this.socket) {
             log('WebSocket не подключен. Невозможно отправить сообщение.');
             return false;
@@ -158,9 +158,11 @@ class ChatSocket {
                 fromId: CONFIG.CURRENT_USER_ID,
                 toId: to,
                 productId: productId,
-                content
+                content,
+                chatId
             };
             
+            log(`Отправка сообщения через WebSocket: ${JSON.stringify(message)}`);
             this.socket.send(JSON.stringify(message));
             return true;
         } catch (error) {
