@@ -18,6 +18,11 @@ func SetManager(manager *Manager) {
 	}
 }
 
+// Получение глобального менеджера
+func GetGlobalManager() *Manager {
+	return globalManager
+}
+
 // Создание нового менеджера WebSocket-соединений
 func NewManager(db *sql.DB) *Manager {
 	return &Manager{
@@ -140,6 +145,7 @@ func createTablesIfNotExist(db *sql.DB) error {
 		sender_id INT NOT NULL,
 		message TEXT NOT NULL,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		read_status BOOLEAN DEFAULT FALSE,
 		FOREIGN KEY (chat_id) REFERENCES chats(id),
 		INDEX idx_chat_id (chat_id)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
@@ -151,6 +157,27 @@ func createTablesIfNotExist(db *sql.DB) error {
 
 	if _, err := db.Exec(createMessagesTable); err != nil {
 		return fmt.Errorf("ошибка создания таблицы messages: %v", err)
+	}
+
+	// Проверяем наличие поля read_status и добавляем его, если отсутствует
+	var columnExists bool
+	err := db.QueryRow(`
+		SELECT COUNT(*) 
+		FROM information_schema.COLUMNS 
+		WHERE TABLE_SCHEMA = DATABASE() 
+		AND TABLE_NAME = 'messages' 
+		AND COLUMN_NAME = 'read_status'
+	`).Scan(&columnExists)
+
+	if err != nil {
+		log.Printf("⚠️ Ошибка при проверке наличия поля read_status: %v", err)
+	} else if !columnExists {
+		_, err := db.Exec(`ALTER TABLE messages ADD COLUMN read_status BOOLEAN DEFAULT FALSE`)
+		if err != nil {
+			log.Printf("❌ Ошибка при добавлении поля read_status: %v", err)
+		} else {
+			log.Println("✅ Добавлено поле read_status в таблицу messages")
+		}
 	}
 
 	log.Println("✅ Структура базы данных проверена и актуализирована")

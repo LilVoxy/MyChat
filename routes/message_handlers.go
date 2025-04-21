@@ -8,18 +8,21 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/LilVoxy/coursework_chat/websocket"
 )
 
 // Message структура для сообщений
 type Message struct {
-	ID        int       `json:"id"`
-	ChatID    int       `json:"chatId"`
-	FromID    int       `json:"fromId"`
-	ToID      int       `json:"toId"`
-	ProductID int       `json:"productId"`
-	Content   string    `json:"content"`
-	Timestamp string    `json:"timestamp"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID         int       `json:"id"`
+	ChatID     int       `json:"chatId"`
+	FromID     int       `json:"fromId"`
+	ToID       int       `json:"toId"`
+	ProductID  int       `json:"productId"`
+	Content    string    `json:"content"`
+	Timestamp  string    `json:"timestamp"`
+	CreatedAt  time.Time `json:"createdAt"`
+	ReadStatus bool      `json:"readStatus"`
 }
 
 // MessagesResponse структура ответа API для сообщений
@@ -70,7 +73,7 @@ func GetMessagesHandler(db *sql.DB) http.HandlerFunc {
 					   WHEN m.sender_id = ? THEN ? 
 					   ELSE m.sender_id 
 				   END as to_id, 
-				   c.product_id, m.message as content, m.created_at
+				   c.product_id, m.message as content, m.created_at, m.read_status
 			FROM messages m
 			JOIN chats c ON m.chat_id = c.id
 			WHERE m.chat_id IN (
@@ -95,9 +98,10 @@ func GetMessagesHandler(db *sql.DB) http.HandlerFunc {
 		for rows.Next() {
 			var msg Message
 			var createdAt time.Time
+			var readStatus sql.NullBool
 
 			// Сканируем данные строки
-			err := rows.Scan(&msg.ID, &msg.ChatID, &msg.FromID, &msg.ToID, &msg.ProductID, &msg.Content, &createdAt)
+			err := rows.Scan(&msg.ID, &msg.ChatID, &msg.FromID, &msg.ToID, &msg.ProductID, &msg.Content, &createdAt, &readStatus)
 			if err != nil {
 				log.Printf("❌ Ошибка при сканировании сообщения: %v", err)
 				continue
@@ -106,6 +110,9 @@ func GetMessagesHandler(db *sql.DB) http.HandlerFunc {
 			// Форматируем время
 			msg.CreatedAt = createdAt
 			msg.Timestamp = createdAt.Format("15:04")
+
+			// Обрабатываем статус прочтения (если NULL, то считаем непрочитанным)
+			msg.ReadStatus = readStatus.Valid && readStatus.Bool
 
 			// Добавляем сообщение в слайс
 			messages = append(messages, msg)
@@ -130,6 +137,11 @@ func GetMessagesHandler(db *sql.DB) http.HandlerFunc {
 				log.Printf("❌ Ошибка при обновлении статуса прочтения: %v", err)
 			} else {
 				log.Printf("✅ Обновлен статус прочтения сообщений для чата между пользователями %d и %d", userId, chatWith)
+
+				// Отправляем уведомления об обновлении статуса
+				if manager := websocket.GetGlobalManager(); manager != nil {
+					go manager.SendReadStatusUpdates(userId, chatWith)
+				}
 			}
 		}
 

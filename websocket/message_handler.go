@@ -146,6 +146,24 @@ func (m *Manager) saveMessage(chatID, fromID int, content string) (int, error) {
 
 // Отправляет сообщение клиентам через WebSocket
 func (m *Manager) sendMessageToClients(msg Message) {
+	// Получаем статус прочтения для исходящего сообщения
+	var readStatus bool
+	err := m.DB.QueryRow(`
+		SELECT read_status FROM messages WHERE id = ?
+	`, msg.ID).Scan(&readStatus)
+
+	if err == nil {
+		// Устанавливаем статус прочтения в сообщении
+		msg.ReadStatus = readStatus
+	} else {
+		// Если ошибка, считаем что сообщение не прочитано
+		msg.ReadStatus = false
+		// Выводим ошибку только если это не "запись не найдена"
+		if err != sql.ErrNoRows {
+			log.Printf("⚠️ Ошибка при получении статуса прочтения: %v", err)
+		}
+	}
+
 	// Сериализуем сообщение в JSON
 	messageJSON, err := json.Marshal(msg)
 	if err != nil {
@@ -156,7 +174,7 @@ func (m *Manager) sendMessageToClients(msg Message) {
 	// Отправляем получателю
 	if client, ok := m.Clients[msg.ToID]; ok {
 		client.Send <- messageJSON
-		log.Printf("✅ Сообщение отправлено получателю: %d", msg.ToID)
+		log.Printf("✅ Сообщение отправлено получателю: %d (статус прочтения: %v)", msg.ToID, msg.ReadStatus)
 	} else {
 		log.Printf("⚠️ Получатель %d не в сети", msg.ToID)
 	}
@@ -165,7 +183,7 @@ func (m *Manager) sendMessageToClients(msg Message) {
 	if msg.FromID != msg.ToID { // Избегаем дублирования для сообщений самому себе
 		if client, ok := m.Clients[msg.FromID]; ok {
 			client.Send <- messageJSON
-			log.Printf("✅ Сообщение отправлено отправителю: %d (для синхронизации)", msg.FromID)
+			log.Printf("✅ Сообщение отправлено отправителю: %d (для синхронизации, статус прочтения: %v)", msg.FromID, msg.ReadStatus)
 		}
 	}
 }
@@ -184,4 +202,62 @@ func (m *Manager) updateLastMessage(chatID int, message string) {
 	}
 
 	log.Printf("✅ Обновлено последнее сообщение в чате ID: %d", chatID)
+}
+
+// Обновляет и отправляет статус прочтения для сообщений
+func (m *Manager) SendReadStatusUpdates(userID, chatWithID int) {
+	// Получаем список сообщений, которые были отмечены как прочитанные
+	rows, err := m.DB.Query(`
+		SELECT m.id, m.chat_id, m.sender_id, m.read_status, m.created_at
+		FROM messages m
+		JOIN chats c ON m.chat_id = c.id
+		WHERE m.sender_id = ? AND m.read_status = TRUE
+		AND m.chat_id IN (
+			SELECT id FROM chats
+			WHERE (buyer_id = ? AND seller_id = ?) 
+			   OR (buyer_id = ? AND seller_id = ?)
+		)
+	`, chatWithID, userID, chatWithID, chatWithID, userID)
+
+	if err != nil {
+		log.Printf("❌ Ошибка при получении обновлений статуса: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	// Создаем список сообщений для обновления
+	var messages []Message
+	for rows.Next() {
+		var msg Message
+		var readStatus bool
+		var createdAt time.Time
+
+		if err := rows.Scan(&msg.ID, &msg.ChatID, &msg.FromID, &readStatus, &createdAt); err != nil {
+			log.Printf("❌ Ошибка при сканировании сообщения: %v", err)
+			continue
+		}
+
+		msg.ToID = userID
+		msg.Type = "message"
+		msg.ReadStatus = readStatus
+		// Важно - не устанавливаем content, чтобы клиент знал, что это только обновление статуса
+		msg.Content = ""                          // Явно устанавливаем пустую строку
+		msg.Timestamp = createdAt.Format("15:04") // Добавляем timestamp для корректного отображения на клиенте
+
+		messages = append(messages, msg)
+	}
+
+	// Отправляем обновления статуса для каждого сообщения
+	for _, msg := range messages {
+		// Отправляем только отправителю (так как получатель уже видел сообщение)
+		if client, ok := m.Clients[msg.FromID]; ok {
+			if msgJSON, err := json.Marshal(msg); err == nil {
+				client.Send <- msgJSON
+				log.Printf("✅ Отправлено обновление статуса для сообщения ID: %d, FromID: %d, ToID: %d, ReadStatus: %v",
+					msg.ID, msg.FromID, msg.ToID, msg.ReadStatus)
+			}
+		} else {
+			log.Printf("⚠️ Клиент %d не в сети для получения обновления статуса", msg.FromID)
+		}
+	}
 }

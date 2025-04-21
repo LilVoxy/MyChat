@@ -418,10 +418,36 @@ class ChatApp {
         // Находим элементы сообщения
         const content = messageElement.querySelector('.message-content');
         const time = messageElement.querySelector('.message-time');
+        const status = messageElement.querySelector('.message-status');
         
         // Устанавливаем направление сообщения
         if (message.fromId === this.currentUser) {
             messageElement.classList.add('message-outgoing');
+            
+            // Добавляем индикатор статуса для исходящих сообщений
+            if (status) {
+                // Очищаем статус
+                status.innerHTML = '';
+                
+                // Создаем иконку в зависимости от статуса прочтения
+                let statusIcon;
+                if (message.readStatus) {
+                    // Прочитано - двойная галочка
+                    status.classList.add('status-read');
+                    statusIcon = document.createElement('i');
+                    statusIcon.className = 'fas fa-check-double';
+                    status.title = 'Прочитано';
+                } else {
+                    // Отправлено - одинарная галочка
+                    status.classList.add('status-sent');
+                    statusIcon = document.createElement('i');
+                    statusIcon.className = 'fas fa-check';
+                    status.title = 'Отправлено';
+                }
+                
+                // Добавляем иконку в контейнер статуса
+                status.appendChild(statusIcon);
+            }
         } else {
             messageElement.classList.add('message-incoming');
         }
@@ -431,7 +457,7 @@ class ChatApp {
         time.textContent = message.timestamp;
         
         // Добавляем title для отладки
-        messageElement.title = `ID: ${message.id}, From: ${message.fromId}, To: ${message.toId}`;
+        messageElement.title = `ID: ${message.id}, From: ${message.fromId}, To: ${message.toId}, Read: ${message.readStatus ? 'Yes' : 'No'}`;
         
         return messageElement;
     }
@@ -518,10 +544,78 @@ class ChatApp {
         
         log(`Получено новое сообщение: ${JSON.stringify(message)}`);
         
-        // Добавляем сообщение в интерфейс
+        // Проверяем, является ли это обновлением статуса прочтения (пустой контент и есть id)
+        if (message.id && (!message.content || message.content === '') && message.readStatus !== undefined) {
+            // Это обновление статуса прочтения
+            this.updateMessageReadStatus(message);
+            return;
+        }
+        
+        // Добавляем новое сообщение в интерфейс
         this.addMessage(message);
         
         // Не вызываем loadChats здесь, так как это делается в addMessage
+    }
+    
+    // Обновление статуса прочтения существующего сообщения
+    updateMessageReadStatus(message) {
+        log(`Обработка обновления статуса прочтения для сообщения ID: ${message.id}, ReadStatus: ${message.readStatus}`);
+        
+        // Проверяем, что есть активный чат
+        if (!this.activeChat) {
+            log(`Пропуск обновления статуса: нет активного чата`);
+            return;
+        }
+        
+        // Проверяем, соответствует ли сообщение активному чату
+        if (!this.isMessageBelongsToChat(message, this.activeChat.id)) {
+            log(`Пропуск обновления статуса: сообщение не принадлежит активному чату`);
+            return;
+        }
+        
+        // Проверяем, что сообщение от текущего пользователя
+        if (message.fromId !== this.currentUser) {
+            log(`Пропуск обновления статуса: сообщение не от текущего пользователя`);
+            return;
+        }
+        
+        // Находим сообщение по ID в текущем чате
+        const messageElements = this.chatMessages.querySelectorAll('.message-outgoing');
+        let found = false;
+        
+        for (const element of messageElements) {
+            // Проверяем ID сообщения из title
+            const titleMatch = element.title.match(/ID: (\d+)/);
+            if (titleMatch && parseInt(titleMatch[1]) === message.id) {
+                found = true;
+                // Нашли нужное сообщение
+                const statusElement = element.querySelector('.message-status');
+                if (statusElement && message.readStatus) {
+                    log(`Обновление статуса для сообщения ID: ${message.id} на 'прочитано'`);
+                    
+                    // Очищаем статус
+                    statusElement.innerHTML = '';
+                    statusElement.className = 'message-status';
+                    statusElement.classList.add('status-read');
+                    
+                    // Создаем иконку прочтения (двойная галочка)
+                    const statusIcon = document.createElement('i');
+                    statusIcon.className = 'fas fa-check-double';
+                    statusElement.title = 'Прочитано';
+                    
+                    // Добавляем иконку
+                    statusElement.appendChild(statusIcon);
+                    
+                    // Обновляем title сообщения
+                    element.title = element.title.replace(/Read: (Yes|No)/, `Read: Yes`);
+                }
+                break;
+            }
+        }
+        
+        if (!found) {
+            log(`Не найдено сообщение с ID: ${message.id} для обновления статуса`);
+        }
     }
     
     // Обработчик события изменения статуса пользователя

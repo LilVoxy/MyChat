@@ -12,17 +12,18 @@ import (
 
 // Структура сообщения для обмена через WebSocket
 type Message struct {
-	Type      string `json:"type"`
-	FromID    int    `json:"fromId,omitempty"`
-	ToID      int    `json:"toId,omitempty"`
-	ProductID int    `json:"productId,omitempty"`
-	ChatID    int    `json:"chatId,omitempty"` // ID чата, к которому относится сообщение
-	Content   string `json:"content,omitempty"`
-	UserID    int    `json:"userId,omitempty"`
-	Status    string `json:"status,omitempty"`
-	IsActive  bool   `json:"isActive,omitempty"`
-	ID        int    `json:"id,omitempty"`
-	Timestamp string `json:"timestamp,omitempty"` // Время отправки сообщения
+	Type       string `json:"type"`
+	FromID     int    `json:"fromId,omitempty"`
+	ToID       int    `json:"toId,omitempty"`
+	ProductID  int    `json:"productId,omitempty"`
+	ChatID     int    `json:"chatId,omitempty"` // ID чата, к которому относится сообщение
+	Content    string `json:"content,omitempty"`
+	UserID     int    `json:"userId,omitempty"`
+	Status     string `json:"status,omitempty"`
+	IsActive   bool   `json:"isActive,omitempty"`
+	ID         int    `json:"id,omitempty"`
+	Timestamp  string `json:"timestamp,omitempty"`  // Время отправки сообщения
+	ReadStatus bool   `json:"readStatus,omitempty"` // Статус прочтения сообщения
 }
 
 // Клиент WebSocket

@@ -279,6 +279,42 @@ body {
     align-self: flex-end;
 }
 
+/* Новые стили для footer сообщения и статусов */
+.message-footer {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    margin-top: 4px;
+    gap: 5px;
+}
+
+.message-status {
+    display: flex;
+    align-items: center;
+}
+
+.message-status i {
+    font-size: 0.8rem;
+    color: #999;
+}
+
+.status-sent i {
+    color: #999;
+}
+
+.status-delivered i {
+    color: #76abf7;
+}
+
+.status-read i {
+    color: #4caf50;
+}
+
+/* Только для исходящих сообщений показываем статус */
+.message-incoming .message-status {
+    display: none;
+}
+
 .message-outgoing .message-time {
     padding-right: 5px;
 }
