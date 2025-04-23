@@ -1,5 +1,17 @@
 # Интеграция клиентского кода WebSocket
 
+## Содержание
+
+- [Изменения в API](#изменения-в-api)
+- [Обновление клиентского JavaScript-кода](#обновление-клиентского-javascript-кода)
+  - [Базовый шаблон обработчика сообщений](#базовый-шаблон-обработчика-сообщений)
+- [Реализация для React](#реализация-для-react)
+- [Примечания по реализации](#примечания-по-реализации)
+- [Общая схема взаимодействия](#общая-схема-взаимодействия)
+- [Обработка ошибок](#обработка-ошибок)
+- [Оптимизация для мобильных клиентов](#оптимизация-для-мобильных-клиентов)
+- [Часто задаваемые вопросы](#часто-задаваемые-вопросы)
+
 После обновления серверной части WebSocket, необходимо адаптировать клиентский код для корректной обработки сообщений и избежания дублирования.
 
 ## Изменения в API
@@ -367,3 +379,267 @@ export default Chat;
 4. Получатель получает сообщение и отображает его в своем интерфейсе
 
 Этот подход решает проблему дублирования сообщений и обеспечивает более надежное отслеживание статуса сообщений. 
+
+## Обработка ошибок
+
+### Типы ошибок
+
+При работе с WebSocket соединением могут возникать следующие типы ошибок:
+
+1. **Ошибки соединения** - проблемы с установкой или потерей соединения
+2. **Ошибки формата сообщений** - неправильный JSON или неверные поля
+3. **Ошибки авторизации** - проблемы с доступом или правами
+4. **Ошибки бизнес-логики** - нарушение правил работы системы
+
+### Стратегии обработки
+
+#### Восстановление соединения
+
+```javascript
+function createWebSocket(userId) {
+  let socket = new WebSocket(`ws://localhost:8080/ws/${userId}`);
+  let reconnectAttempts = 0;
+  const maxReconnectAttempts = 5;
+  
+  socket.onclose = function(event) {
+    if (event.wasClean) {
+      console.log('Соединение закрыто корректно');
+    } else {
+      console.error('Соединение разорвано');
+      
+      // Экспоненциальный backoff для повторных попыток
+      if (reconnectAttempts < maxReconnectAttempts) {
+        const timeout = Math.pow(2, reconnectAttempts) * 1000;
+        console.log(`Повторное подключение через ${timeout / 1000} сек...`);
+        
+        setTimeout(() => {
+          reconnectAttempts++;
+          socket = createWebSocket(userId);
+        }, timeout);
+      } else {
+        console.error('Превышено максимальное число попыток подключения');
+        showConnectionError('Не удалось подключиться к серверу. Попробуйте позже.');
+      }
+    }
+  };
+  
+  socket.onerror = function(error) {
+    console.error('Ошибка WebSocket:', error);
+  };
+  
+  return socket;
+}
+
+// Использование функции
+const ws = createWebSocket(123);
+```
+
+#### Обработка ошибок сервера
+
+```javascript
+ws.onmessage = function(event) {
+  const data = JSON.parse(event.data);
+  
+  if (data.type === 'error') {
+    console.error('Ошибка от сервера:', data.content);
+    
+    switch(data.code) {
+      case 'INVALID_MESSAGE':
+        // Обработка ошибки формата сообщения
+        showNotification('Ошибка формата сообщения', 'error');
+        break;
+        
+      case 'MESSAGE_TOO_LARGE':
+        // Обработка ошибки превышения размера сообщения
+        showNotification('Сообщение слишком большое', 'error');
+        break;
+        
+      case 'UNAUTHORIZED':
+        // Обработка ошибки авторизации
+        handleAuthError();
+        break;
+        
+      default:
+        // Обработка прочих ошибок
+        showNotification('Произошла ошибка: ' + data.content, 'error');
+    }
+  }
+};
+```
+
+### Отображение ошибок в UI
+
+Рекомендуется создать единый компонент для отображения ошибок:
+
+```javascript
+function showNotification(message, type = 'info', duration = 5000) {
+  const notification = document.createElement('div');
+  notification.className = `notification notification-${type}`;
+  notification.textContent = message;
+  
+  document.getElementById('notifications-container').appendChild(notification);
+  
+  setTimeout(() => {
+    notification.classList.add('fadeout');
+    setTimeout(() => notification.remove(), 300);
+  }, duration);
+}
+```
+
+## Оптимизация для мобильных клиентов
+
+### Управление соединением
+
+На мобильных устройствах важно оптимизировать использование батареи и трафика:
+
+```javascript
+// Флаг активности приложения
+let isAppActive = true;
+
+// Обработчики событий видимости приложения
+document.addEventListener('visibilitychange', function() {
+  isAppActive = !document.hidden;
+  
+  if (isAppActive) {
+    // Приложение активно, восстанавливаем соединение
+    if (ws.readyState !== WebSocket.OPEN) {
+      ws = createWebSocket(userId);
+    }
+  } else {
+    // Приложение неактивно, можно закрыть соединение для экономии ресурсов
+    if (ws.readyState === WebSocket.OPEN) {
+      // Отправляем статус "away" перед закрытием
+      ws.send(JSON.stringify({
+        type: 'status',
+        userId: userId,
+        status: 'away'
+      }));
+      
+      // Закрываем соединение
+      ws.close(1000, 'App inactive');
+    }
+  }
+});
+
+// Для мобильных приложений (React Native, Flutter, etc.)
+// используйте соответствующие API для отслеживания состояния приложения
+// например, AppState в React Native
+```
+
+### Экономия трафика
+
+1. **Оптимизация размера сообщений**:
+   - Используйте короткие имена полей
+   - Отправляйте только необходимые данные
+
+2. **Пакетная отправка**:
+   - Группируйте события чтения сообщений
+   - Отправляйте одно событие "read" вместо нескольких
+
+```javascript
+// Пример оптимизации отметки о прочтении
+let lastReadIds = {};
+let readTimeout = null;
+
+function markAsRead(toId, productId, messageId) {
+  // Сохраняем последний ID для каждой комбинации получатель+товар
+  const key = `${toId}:${productId}`;
+  lastReadIds[key] = messageId;
+  
+  // Откладываем отправку, чтобы сгруппировать несколько событий
+  if (readTimeout) {
+    clearTimeout(readTimeout);
+  }
+  
+  readTimeout = setTimeout(() => {
+    // Отправляем все накопленные отметки о прочтении
+    for (const [key, id] of Object.entries(lastReadIds)) {
+      const [toId, productId] = key.split(':');
+      ws.send(JSON.stringify({
+        type: 'read',
+        fromId: userId,
+        toId: parseInt(toId),
+        productId: parseInt(productId),
+        lastReadId: id
+      }));
+    }
+    
+    lastReadIds = {};
+    readTimeout = null;
+  }, 1000);
+}
+```
+
+## Часто задаваемые вопросы
+
+### 1. Как обрабатывать одновременные соединения с нескольких устройств?
+
+Система поддерживает несколько одновременных соединений для одного пользователя. Сообщения будут доставлены на все устройства. Каждое устройство должно иметь уникальный идентификатор для отслеживания:
+
+```javascript
+const deviceId = localStorage.getItem('device_id') || generateUUID();
+localStorage.setItem('device_id', deviceId);
+
+// При подключении передаем дополнительный заголовок
+const ws = new WebSocket(`ws://localhost:8080/ws/${userId}`);
+ws.setRequestHeader('X-Device-ID', deviceId);
+```
+
+### 2. Что делать, если соединение часто разрывается?
+
+- Используйте стратегию экспоненциального отката (exponential backoff)
+- Проверьте качество сети
+- Уменьшите частоту отправки сообщений
+- Увеличьте таймаут пинг-понг сообщений
+
+### 3. Как проверить состояние соединения перед отправкой?
+
+```javascript
+function safeSend(socket, message) {
+  return new Promise((resolve, reject) => {
+    if (socket.readyState === WebSocket.CONNECTING) {
+      // Подключение еще не установлено
+      socket.addEventListener('open', () => {
+        socket.send(message);
+        resolve();
+      }, { once: true });
+    } else if (socket.readyState === WebSocket.OPEN) {
+      // Соединение активно
+      socket.send(message);
+      resolve();
+    } else {
+      // Соединение закрыто или закрывается
+      reject(new Error('WebSocket connection is not open'));
+    }
+  });
+}
+
+// Использование
+safeSend(ws, JSON.stringify({ type: 'message', ... }))
+  .then(() => console.log('Сообщение отправлено'))
+  .catch(error => {
+    console.error('Ошибка отправки:', error);
+    // Здесь можно попытаться переподключиться
+  });
+```
+
+### 4. Как отобразить правильный статус сообщения?
+
+- `sending` - Сообщение отправляется (на клиенте)
+- `sent` - Сообщение доставлено на сервер
+- `delivered` - Сообщение доставлено получателю (есть активное соединение)
+- `read` - Сообщение прочитано получателем (получено уведомление "read")
+
+Используйте иконки или текст для отображения статуса:
+
+```javascript
+function getStatusIcon(status) {
+  switch(status) {
+    case 'sending': return '⏳';
+    case 'sent': return '✓';
+    case 'delivered': return '✓✓';
+    case 'read': return '✓✓✓';
+    default: return '';
+  }
+}
+``` 

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Страница товара</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.2.0/css/all.min.css">
+</head>
+<body>
+    <div class="product-container">
+        <!-- Левая часть: изображение товара -->
+        <div class="product-image-container">
+            <img id="product-image" src="../images/placeholder.svg" alt="Изображение товара">
+        </div>
+        
+        <!-- Правая часть: информация о товаре -->
+        <div class="product-info-container">
+            <h1 id="product-name">Название товара</h1>
+            
+            <div class="product-price-container">
+                <span class="product-price-label">Цена</span>
+                <span id="product-price" class="product-price">0 ₽</span>
+            </div>
+            
+            <div class="product-category-container">
+                <span class="product-category-label">Категория</span>
+                <span id="product-category" class="product-category">Категория товара</span>
+            </div>
+            
+            <div class="seller-container">
+                <div class="seller-avatar">
+                    <img id="seller-avatar" src="../images/user-placeholder.svg" alt="Аватар продавца">
+                    <span class="status-indicator offline" id="seller-status"></span>
+                </div>
+                <div class="seller-info">
+                    <div id="seller-name" class="seller-name">IMPL STORE</div>
+                    <div id="seller-online-status" class="seller-status">в сети</div>
+                </div>
+            </div>
+            
+            <div class="product-actions">
+                <button id="chat-button" class="action-button chat-button">
+                    <i class="fas fa-comment"></i> Написать
+                </button>
+                <button id="seller-page-button" class="action-button seller-page-button">
+                    <i class="fas fa-store"></i> Страница продавца
+                </button>
+                <button id="favorite-button" class="action-button favorite-button">
+                    <i class="far fa-heart"></i> В избранное
+                </button>
+            </div>
+            
+            <div class="product-description-container">
+                <h2>Описание</h2>
+                <div id="product-description" class="product-description">
+                    Здесь будет отображаться подробное описание товара с информацией о его характеристиках, состоянии и прочих особенностях.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/product.js"></script>
+</body>
+</html> 
