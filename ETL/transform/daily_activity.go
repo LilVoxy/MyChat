@@ -3,6 +3,7 @@ package transform
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/LilVoxy/coursework_chat/ETL/models"
@@ -36,10 +37,6 @@ func (p *DailyActivityProcessor) ProcessDailyActivity() ([]models.DailyActivityF
 
 	// Результирующий список фактов ежедневной активности
 	dailyFacts := make([]models.DailyActivityFact, 0)
-
-	// Получаем данные о сообщениях и пользователях для анализа
-	// В реальной имплементации мы бы делали запросы к OLAP базе
-	// Для прототипа сгенерируем синтетические данные
 
 	// Получаем соответствие дат к time_id через специальную функцию
 	timeIDMap, err := p.getTimeIDMapping()
@@ -165,10 +162,17 @@ func (p *DailyActivityProcessor) ProcessDailyActivity() ([]models.DailyActivityF
 		// Получаем time_id из маппинга
 		dateID := p.getTimeID(timeIDMap, dateStr)
 		if dateID == 0 {
-			// Если не найден ID, используем временный ID
+			// Если не найден ID, создаем новую запись в time_dimension
 			t, _ := time.Parse("2006-01-02", dateStr)
-			dateID = -1 * (int(t.Unix()) % 10000) // Отрицательный ID для индикации временного значения
-			p.logger.Debug("Использован временный date_id для %s: %d", dateStr, dateID)
+			var err error
+			dateID, err = p.ensureTimeDimensionRecord(t)
+			if err != nil {
+				p.logger.Error("Не удалось создать запись в time_dimension для даты %s: %v", dateStr, err)
+				continue // Пропускаем эту дату
+			}
+
+			// Обновляем маппинг
+			timeIDMap[dateStr] = dateID
 		}
 
 		// Создаем факт ежедневной активности
@@ -194,97 +198,72 @@ func (p *DailyActivityProcessor) ProcessDailyActivity() ([]models.DailyActivityF
 
 // getActivityData получает данные о сообщениях и регистрациях пользователей для анализа
 func (p *DailyActivityProcessor) getActivityData(since time.Time) ([]messageInfo, []time.Time, error) {
-	// В реальной имплементации здесь были бы запросы к OLAP базе
-	// Для прототипа создаем синтетические данные
+	// Получаем сообщения из OLTP
+	rows, err := p.oltpDB.Query(`
+		SELECT id, chat_id, sender_id, created_at
+		FROM messages
+		WHERE created_at >= ?
+	`, since)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
 
-	// Генерируем случайные данные о сообщениях за последние 30 дней
-	messages := make([]messageInfo, 0)
-	registrationDates := make([]time.Time, 0)
-	now := time.Now()
-
-	// Создаем 15 случайных чатов
-	chatIDs := []int{1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009, 1010, 1011, 1012, 1013, 1014, 1015}
-
-	// Создаем 20 пользователей
-	userIDs := []int{101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120}
-
-	// Создаем даты регистрации для 20 пользователей, распределенные по 30 дням
-	for i := 0; i < 20; i++ {
-		day := i % 30
-		regDate := now.AddDate(0, 0, -day)
-		registrationDates = append(registrationDates, regDate)
+	var messages []messageInfo
+	for rows.Next() {
+		var m messageInfo
+		if err := rows.Scan(&m.id, &m.chatID, &m.senderID, &m.createdAt); err != nil {
+			return nil, nil, err
+		}
+		messages = append(messages, m)
 	}
 
-	// Создаем данные за последние 30 дней с разной интенсивностью по дням
-	// Интенсивность выше ближе к текущей дате
-	for day := 0; day < 30; day++ {
-		date := now.AddDate(0, 0, -day)
+	// Группируем сообщения по чатам (создаем карту индексов, а не указателей)
+	chatMessageIndices := make(map[int][]int)
+	for i := range messages {
+		chatMessageIndices[messages[i].chatID] = append(chatMessageIndices[messages[i].chatID], i)
+	}
 
-		// Количество сообщений в день уменьшается с давностью
-		dailyMessageCount := 100 - day*3
-		if dailyMessageCount < 10 {
-			dailyMessageCount = 10
-		}
+	// Для каждого чата сортируем сообщения по времени и вычисляем isFirstInChat/responseTime
+	for _, indices := range chatMessageIndices {
+		// Сортируем индексы по времени сообщений
+		sort.Slice(indices, func(i, j int) bool {
+			return messages[indices[i]].createdAt.Before(messages[indices[j]].createdAt)
+		})
 
-		// Распределение активности по часам (больше днем, меньше ночью)
-		hourlyDistribution := []int{1, 0, 0, 0, 1, 2, 5, 10, 15, 20, 15, 10, 20, 25, 20, 15, 10, 15, 10, 5, 3, 2, 1, 0}
-
-		chatActive := make(map[int]bool)
-		lastSender := make(map[int]int) // chatID -> lastSenderID
-
-		// Распределяем сообщения по часам и чатам
-		hourlyMessages := make(map[int]int) // час -> количество сообщений
-		for i := 0; i < dailyMessageCount; i++ {
-			// Выбираем случайный час на основе распределения
-			hourIdx := i % len(hourlyDistribution)
-			hour := hourIdx
-			messageCount := hourlyDistribution[hourIdx]
-
-			hourlyMessages[hour] += messageCount
-
-			for j := 0; j < messageCount; j++ {
-				// Выбираем чат (используем индекс для распределения)
-				chatIdx := (i + j) % len(chatIDs)
-				chatID := chatIDs[chatIdx]
-
-				// Выбираем отправителя (используем индекс для распределения)
-				senderIdx := (i + j*2) % len(userIDs)
-				senderID := userIDs[senderIdx]
-
-				// Создаем время сообщения, распределяя минуты
-				minute := (j * 60 / messageCount) % 60
-				msgTime := time.Date(date.Year(), date.Month(), date.Day(), hour, minute, 0, 0, time.UTC)
-
-				// Определяем, является ли сообщение первым в чате для этого дня
-				isFirst := !chatActive[chatID]
-				if isFirst {
-					chatActive[chatID] = true
-					lastSender[chatID] = senderID
+		// Помечаем первое сообщение и вычисляем время ответа
+		for i, idx := range indices {
+			if i == 0 {
+				messages[idx].isFirstInChat = true
+				messages[idx].responseTime = 0
+			} else {
+				messages[idx].isFirstInChat = false
+				prevIdx := indices[i-1]
+				if messages[idx].senderID != messages[prevIdx].senderID {
+					messages[idx].responseTime = messages[idx].createdAt.Sub(messages[prevIdx].createdAt).Minutes()
+				} else {
+					messages[idx].responseTime = 0
 				}
-
-				// Рассчитываем время ответа
-				var responseTime float64
-				if !isFirst && lastSender[chatID] != senderID {
-					// Если это ответ (другой отправитель), устанавливаем время ответа от 1 до 15 минут
-					responseTime = 1 + float64((i+j)%15)
-				}
-
-				// Запоминаем последнего отправителя
-				lastSender[chatID] = senderID
-
-				// Создаем запись о сообщении
-				msg := messageInfo{
-					id:            10000 + day*1000 + hour*10 + j,
-					chatID:        chatID,
-					senderID:      senderID,
-					createdAt:     msgTime,
-					isFirstInChat: isFirst,
-					responseTime:  responseTime,
-				}
-
-				messages = append(messages, msg)
 			}
 		}
+	}
+
+	// Получаем даты регистрации пользователей
+	userRows, err := p.oltpDB.Query(`
+		SELECT created_at FROM users WHERE created_at >= ?
+	`, since)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer userRows.Close()
+
+	var registrationDates []time.Time
+	for userRows.Next() {
+		var reg time.Time
+		if err := userRows.Scan(&reg); err != nil {
+			return nil, nil, err
+		}
+		registrationDates = append(registrationDates, reg)
 	}
 
 	return messages, registrationDates, nil
@@ -294,20 +273,24 @@ func (p *DailyActivityProcessor) getActivityData(since time.Time) ([]messageInfo
 func (p *DailyActivityProcessor) getTimeIDMapping() (map[string]int, error) {
 	timeIDMap := make(map[string]int)
 
-	// В реальной имплементации здесь был бы запрос к OLAP базе для получения маппинга
-	// Для прототипа создаем тестовые данные
-
-	// Создаем данные для последних 30 дней (для примера)
-	now := time.Now()
-	for i := 0; i < 30; i++ {
-		date := now.AddDate(0, 0, -i)
-		dateStr := date.Format("2006-01-02")
-
-		// Генерируем простой ID на основе даты
-		// В реальной системе ID были бы получены из базы данных
-		timeIDMap[dateStr] = 1000 + i
+	rows, err := p.olapDB.Query(`
+		SELECT id, full_date
+		FROM chat_analytics.time_dimension
+		WHERE hour_of_day = 0 AND full_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка при запросе time_dimension: %w", err)
 	}
+	defer rows.Close()
 
+	for rows.Next() {
+		var id int
+		var dateStr string
+		if err := rows.Scan(&id, &dateStr); err != nil {
+			return nil, err
+		}
+		timeIDMap[dateStr] = id
+	}
 	return timeIDMap, nil
 }
 
@@ -317,4 +300,82 @@ func (p *DailyActivityProcessor) getTimeID(timeIDMap map[string]int, date string
 		return timeID
 	}
 	return 0 // Возвращаем 0, если не найдено
+}
+
+// ensureTimeDimensionRecord создает запись в time_dimension для указанной даты и возвращает ID
+func (p *DailyActivityProcessor) ensureTimeDimensionRecord(t time.Time) (int, error) {
+	// Запрос для поиска существующей записи с hour_of_day = 0 для данной даты
+	var id int
+	err := p.olapDB.QueryRow(`
+		SELECT id FROM chat_analytics.time_dimension 
+		WHERE full_date = ? AND hour_of_day = 0
+	`, t.Format("2006-01-02")).Scan(&id)
+
+	if err == nil {
+		// Запись уже существует
+		return id, nil
+	} else if err != sql.ErrNoRows {
+		// Произошла ошибка, отличная от "записи не найдены"
+		return 0, err
+	}
+
+	// Создаем новую запись для day-only аггрегатов (hour_of_day = 0)
+	// Определяем компоненты даты
+	year := t.Year()
+	month := int(t.Month())
+	monthNames := []string{"January", "February", "March", "April", "May", "June",
+		"July", "August", "September", "October", "November", "December"}
+	monthName := monthNames[month-1]
+
+	// Определяем квартал
+	quarter := (month-1)/3 + 1
+
+	// Номер недели в году (приблизительно)
+	yearDay := t.YearDay()
+	weekOfYear := (yearDay-1)/7 + 1
+
+	dayOfMonth := t.Day()
+	dayOfWeek := int(t.Weekday()) + 1 // 1=Sunday, 7=Saturday
+	dayNames := []string{"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"}
+	dayName := dayNames[dayOfWeek-1]
+
+	// Выходной день (суббота или воскресенье)
+	isWeekend := dayOfWeek == 1 || dayOfWeek == 7
+
+	// Для day-only аггрегатов всегда указываем hour_of_day = 0
+	hourOfDay := 0
+
+	// Вставляем запись
+	result, err := p.olapDB.Exec(`
+		INSERT INTO chat_analytics.time_dimension 
+		(full_date, year, quarter, month, month_name, week_of_year, 
+		day_of_month, day_of_week, day_name, is_weekend, hour_of_day) 
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		t.Format("2006-01-02"), // full_date
+		year,
+		quarter,
+		month,
+		monthName,
+		weekOfYear,
+		dayOfMonth,
+		dayOfWeek,
+		dayName,
+		isWeekend,
+		hourOfDay,
+	)
+
+	if err != nil {
+		return 0, fmt.Errorf("ошибка при создании записи в time_dimension: %w", err)
+	}
+
+	// Получаем ID вставленной записи
+	lastID, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("ошибка при получении ID новой записи time_dimension: %w", err)
+	}
+
+	p.logger.Debug("Создана новая запись в time_dimension для даты %s, ID: %d",
+		t.Format("2006-01-02"), lastID)
+	return int(lastID), nil
 }
