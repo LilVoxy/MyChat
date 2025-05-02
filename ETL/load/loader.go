@@ -20,9 +20,6 @@ type Loader interface {
 
 	// LoadDailyActivityFacts загружает данные в факты ежедневной активности
 	LoadDailyActivityFacts(facts []models.DailyActivityFact) error
-
-	// LoadHourlyActivityFacts загружает данные в факты почасовой активности
-	LoadHourlyActivityFacts(facts []models.HourlyActivityFact) error
 }
 
 // OLAPLoader реализация Loader для OLAP базы данных
@@ -71,9 +68,4 @@ func (l *OLAPLoader) LoadChatFacts(chats []models.ChatFact) error {
 // LoadDailyActivityFacts загружает данные в факты ежедневной активности
 func (l *OLAPLoader) LoadDailyActivityFacts(facts []models.DailyActivityFact) error {
 	return l.activityLoader.LoadDailyFacts(facts)
-}
-
-// LoadHourlyActivityFacts загружает данные в факты почасовой активности
-func (l *OLAPLoader) LoadHourlyActivityFacts(facts []models.HourlyActivityFact) error {
-	return l.activityLoader.LoadHourlyFacts(facts)
 }

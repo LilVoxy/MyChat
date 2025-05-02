@@ -6,10 +6,9 @@ type TransformedData struct {
 	Users []UserDimension
 
 	// Факты
-	Messages       []MessageFact
-	Chats          []ChatFact
-	DailyActivity  []DailyActivityFact
-	HourlyActivity []HourlyActivityFact
+	Messages      []MessageFact
+	Chats         []ChatFact
+	DailyActivity []DailyActivityFact
 
 	// Метаданные
 	Metadata ETLMetadata

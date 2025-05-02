@@ -80,19 +80,6 @@ func ETLExample(oltpDB, olapDB *sql.DB, logger *utils.ETLLogger) error {
 		// ... другие дни
 	}
 
-	// 2.5 Почасовые факты активности
-	hourlyFacts := []models.HourlyActivityFact{
-		{
-			DateID:                 1001,
-			HourOfDay:              14,
-			TotalMessages:          20,
-			TotalNewChats:          3,
-			ActiveUsers:            8,
-			AvgResponseTimeMinutes: 1.9,
-		},
-		// ... другие часы
-	}
-
 	// 3. Загружаем данные в OLAP
 	logger.Info("Начало ETL-процесса (фаза Load)...")
 
@@ -118,12 +105,6 @@ func ETLExample(oltpDB, olapDB *sql.DB, logger *utils.ETLLogger) error {
 	logger.Info("Загрузка фактов ежедневной активности...")
 	if err := loader.LoadDailyActivityFacts(dailyFacts); err != nil {
 		return fmt.Errorf("ошибка при загрузке ежедневной активности: %w", err)
-	}
-
-	// 3.5 Загружаем почасовые факты активности
-	logger.Info("Загрузка фактов почасовой активности...")
-	if err := loader.LoadHourlyActivityFacts(hourlyFacts); err != nil {
-		return fmt.Errorf("ошибка при загрузке почасовой активности: %w", err)
 	}
 
 	logger.Info("ETL-процесс (фаза Load) успешно завершен")

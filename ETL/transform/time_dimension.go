@@ -53,14 +53,14 @@ func (p *TimeDimensionProcessor) createInitialTimeDimension() error {
 
 	// Определяем начальную и конечную даты (22.04.2025 - 21.04.2026)
 	startDate := time.Date(2025, 4, 22, 0, 0, 0, 0, time.UTC)
-	endDate := time.Date(2026, 4, 21, 23, 0, 0, 0, time.UTC)
+	endDate := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
 
 	// Подготавливаем SQL-запрос для вставки
 	stmt, err := p.olapDB.Prepare(`
 		INSERT INTO chat_analytics.time_dimension 
 		(full_date, year, quarter, month, month_name, week_of_year, 
-		day_of_month, day_of_week, day_name, is_weekend, hour_of_day) 
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		day_of_month, day_of_week, day_name, is_weekend) 
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("ошибка при подготовке запроса: %w", err)
@@ -72,7 +72,7 @@ func (p *TimeDimensionProcessor) createInitialTimeDimension() error {
 		"July", "August", "September", "October", "November", "December"}
 	dayNames := []string{"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"}
 
-	// Итерируемся по всем часам в указанном периоде
+	// Итерируемся по всем дням в указанном периоде
 	current := startDate
 	count := 0
 	for current.Before(endDate) || current.Equal(endDate) {
@@ -95,8 +95,6 @@ func (p *TimeDimensionProcessor) createInitialTimeDimension() error {
 		// Выходной день (суббота или воскресенье)
 		isWeekend := dayOfWeek == 1 || dayOfWeek == 7
 
-		hourOfDay := current.Hour()
-
 		// Вставляем запись
 		_, err := stmt.Exec(
 			current.Format("2006-01-02"), // full_date
@@ -109,18 +107,17 @@ func (p *TimeDimensionProcessor) createInitialTimeDimension() error {
 			dayOfWeek,
 			dayName,
 			isWeekend,
-			hourOfDay,
 		)
 		if err != nil {
 			return fmt.Errorf("ошибка при вставке записи измерения времени: %w", err)
 		}
 
-		// Переходим к следующему часу
-		current = current.Add(time.Hour)
+		// Переходим к следующему дню
+		current = current.Add(24 * time.Hour)
 		count++
 
-		// Логируем прогресс каждые 24 часа
-		if count%24 == 0 {
+		// Логируем прогресс каждые 7 дней
+		if count%7 == 0 {
 			p.logger.Debug("Создано %d записей измерения времени...", count)
 		}
 	}

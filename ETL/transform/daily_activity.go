@@ -10,6 +10,16 @@ import (
 	"github.com/LilVoxy/coursework_chat/ETL/utils"
 )
 
+// Вспомогательная структура для хранения данных о сообщениях
+type messageInfo struct {
+	id            int
+	chatID        int
+	senderID      int
+	createdAt     time.Time
+	isFirstInChat bool
+	responseTime  float64
+}
+
 // DailyActivityProcessor отвечает за обработку ежедневной активности
 type DailyActivityProcessor struct {
 	oltpDB *sql.DB
@@ -276,7 +286,7 @@ func (p *DailyActivityProcessor) getTimeIDMapping() (map[string]int, error) {
 	rows, err := p.olapDB.Query(`
 		SELECT id, full_date
 		FROM chat_analytics.time_dimension
-		WHERE hour_of_day = 0 AND full_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+		WHERE full_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка при запросе time_dimension: %w", err)
@@ -304,11 +314,11 @@ func (p *DailyActivityProcessor) getTimeID(timeIDMap map[string]int, date string
 
 // ensureTimeDimensionRecord создает запись в time_dimension для указанной даты и возвращает ID
 func (p *DailyActivityProcessor) ensureTimeDimensionRecord(t time.Time) (int, error) {
-	// Запрос для поиска существующей записи с hour_of_day = 0 для данной даты
+	// Запрос для поиска существующей записи для данной даты
 	var id int
 	err := p.olapDB.QueryRow(`
 		SELECT id FROM chat_analytics.time_dimension 
-		WHERE full_date = ? AND hour_of_day = 0
+		WHERE full_date = ?
 	`, t.Format("2006-01-02")).Scan(&id)
 
 	if err == nil {
@@ -319,7 +329,7 @@ func (p *DailyActivityProcessor) ensureTimeDimensionRecord(t time.Time) (int, er
 		return 0, err
 	}
 
-	// Создаем новую запись для day-only аггрегатов (hour_of_day = 0)
+	// Создаем новую запись
 	// Определяем компоненты даты
 	year := t.Year()
 	month := int(t.Month())
@@ -342,15 +352,12 @@ func (p *DailyActivityProcessor) ensureTimeDimensionRecord(t time.Time) (int, er
 	// Выходной день (суббота или воскресенье)
 	isWeekend := dayOfWeek == 1 || dayOfWeek == 7
 
-	// Для day-only аггрегатов всегда указываем hour_of_day = 0
-	hourOfDay := 0
-
 	// Вставляем запись
 	result, err := p.olapDB.Exec(`
 		INSERT INTO chat_analytics.time_dimension 
 		(full_date, year, quarter, month, month_name, week_of_year, 
-		day_of_month, day_of_week, day_name, is_weekend, hour_of_day) 
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		day_of_month, day_of_week, day_name, is_weekend) 
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		t.Format("2006-01-02"), // full_date
 		year,
@@ -362,7 +369,6 @@ func (p *DailyActivityProcessor) ensureTimeDimensionRecord(t time.Time) (int, er
 		dayOfWeek,
 		dayName,
 		isWeekend,
-		hourOfDay,
 	)
 
 	if err != nil {

@@ -102,8 +102,7 @@ func (p *MessageFactsProcessor) ProcessMessageFacts(messages []models.MessageOLT
 
 			// Получаем time_id из маппинга
 			dateKey := msg.CreatedAt.Format("2006-01-02")
-			hourKey := msg.CreatedAt.Hour()
-			timeID := p.getTimeID(timeIDMap, dateKey, hourKey)
+			timeID := p.getTimeID(timeIDMap, dateKey, 0)
 
 			// Если не удалось найти time_id, создаем новую запись в time_dimension
 			if timeID == 0 {
@@ -115,10 +114,7 @@ func (p *MessageFactsProcessor) ProcessMessageFacts(messages []models.MessageOLT
 				}
 
 				// Обновляем маппинг
-				if _, ok := timeIDMap[dateKey]; !ok {
-					timeIDMap[dateKey] = make(map[int]int)
-				}
-				timeIDMap[dateKey][hourKey] = timeID
+				timeIDMap[dateKey] = timeID
 			}
 
 			// Создаем объект MessageFact
@@ -142,12 +138,12 @@ func (p *MessageFactsProcessor) ProcessMessageFacts(messages []models.MessageOLT
 	return transformedMessages, nil
 }
 
-// getTimeIDMapping получает маппинг дат и часов к time_id из OLAP базы данных
-func (p *MessageFactsProcessor) getTimeIDMapping() (map[string]map[int]int, error) {
-	timeIDMap := make(map[string]map[int]int)
+// getTimeIDMapping получает маппинг дат к time_id из OLAP базы данных
+func (p *MessageFactsProcessor) getTimeIDMapping() (map[string]int, error) {
+	timeIDMap := make(map[string]int)
 
 	rows, err := p.olapDB.Query(`
-		SELECT id, full_date, hour_of_day
+		SELECT id, full_date
 		FROM chat_analytics.time_dimension
 		WHERE full_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
 	`)
@@ -157,25 +153,20 @@ func (p *MessageFactsProcessor) getTimeIDMapping() (map[string]map[int]int, erro
 	defer rows.Close()
 
 	for rows.Next() {
-		var id, hour int
+		var id int
 		var dateStr string
-		if err := rows.Scan(&id, &dateStr, &hour); err != nil {
+		if err := rows.Scan(&id, &dateStr); err != nil {
 			return nil, err
 		}
-		if _, ok := timeIDMap[dateStr]; !ok {
-			timeIDMap[dateStr] = make(map[int]int)
-		}
-		timeIDMap[dateStr][hour] = id
+		timeIDMap[dateStr] = id
 	}
 	return timeIDMap, nil
 }
 
-// getTimeID возвращает time_id для указанной даты и часа из маппинга
-func (p *MessageFactsProcessor) getTimeID(timeIDMap map[string]map[int]int, date string, hour int) int {
-	if hourMap, dateExists := timeIDMap[date]; dateExists {
-		if timeID, hourExists := hourMap[hour]; hourExists {
-			return timeID
-		}
+// getTimeID возвращает time_id для указанной даты из маппинга
+func (p *MessageFactsProcessor) getTimeID(timeIDMap map[string]int, date string, _ int) int {
+	if timeID, exists := timeIDMap[date]; exists {
+		return timeID
 	}
 	return 0 // Возвращаем 0, если не найдено
 }
@@ -186,8 +177,8 @@ func (p *MessageFactsProcessor) ensureTimeDimensionRecord(t time.Time) (int, err
 	var id int
 	err := p.olapDB.QueryRow(`
 		SELECT id FROM chat_analytics.time_dimension 
-		WHERE full_date = ? AND hour_of_day = ?
-	`, t.Format("2006-01-02"), t.Hour()).Scan(&id)
+		WHERE full_date = ?
+	`, t.Format("2006-01-02")).Scan(&id)
 
 	if err == nil {
 		// Запись уже существует
@@ -220,14 +211,12 @@ func (p *MessageFactsProcessor) ensureTimeDimensionRecord(t time.Time) (int, err
 	// Выходной день (суббота или воскресенье)
 	isWeekend := dayOfWeek == 1 || dayOfWeek == 7
 
-	hourOfDay := t.Hour()
-
 	// Вставляем запись
 	result, err := p.olapDB.Exec(`
 		INSERT INTO chat_analytics.time_dimension 
 		(full_date, year, quarter, month, month_name, week_of_year, 
-		day_of_month, day_of_week, day_name, is_weekend, hour_of_day) 
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		day_of_month, day_of_week, day_name, is_weekend) 
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		t.Format("2006-01-02"), // full_date
 		year,
@@ -239,7 +228,6 @@ func (p *MessageFactsProcessor) ensureTimeDimensionRecord(t time.Time) (int, err
 		dayOfWeek,
 		dayName,
 		isWeekend,
-		hourOfDay,
 	)
 
 	if err != nil {
@@ -252,7 +240,7 @@ func (p *MessageFactsProcessor) ensureTimeDimensionRecord(t time.Time) (int, err
 		return 0, fmt.Errorf("ошибка при получении ID новой записи time_dimension: %w", err)
 	}
 
-	p.logger.Debug("Создана новая запись в time_dimension для даты %s, часа %d, ID: %d",
-		t.Format("2006-01-02"), hourOfDay, lastID)
+	p.logger.Debug("Создана новая запись в time_dimension для даты %s, ID: %d",
+		t.Format("2006-01-02"), lastID)
 	return int(lastID), nil
 }

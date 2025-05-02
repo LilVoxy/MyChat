@@ -67,15 +67,6 @@ func (m *LoadManager) Load(transformedData *models.TransformedData) error {
 		}
 	}
 
-	// 5. Загружаем почасовые факты активности
-	if len(transformedData.HourlyActivity) > 0 {
-		m.logger.Info("Загрузка фактов почасовой активности...")
-		if err := m.loader.LoadHourlyActivityFacts(transformedData.HourlyActivity); err != nil {
-			m.logger.Error("Ошибка при загрузке фактов почасовой активности: %v", err)
-			return fmt.Errorf("ошибка при загрузке фактов почасовой активности: %w", err)
-		}
-	}
-
 	duration := time.Since(startTime)
 	m.logger.Info("Фаза Load завершена. Длительность: %v", duration)
 

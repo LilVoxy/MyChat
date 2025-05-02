@@ -19,7 +19,6 @@ type Transformer struct {
 	messageFProcessor *MessageFactsProcessor
 	chatFProcessor    *ChatFactsProcessor
 	dailyFProcessor   *DailyActivityProcessor
-	hourlyFProcessor  *HourlyActivityProcessor
 }
 
 // NewTransformer создает новый экземпляр Transformer
@@ -33,7 +32,6 @@ func NewTransformer(oltpDB, olapDB *sql.DB, logger *utils.ETLLogger) *Transforme
 		messageFProcessor: NewMessageFactsProcessor(oltpDB, olapDB, logger),
 		chatFProcessor:    NewChatFactsProcessor(oltpDB, olapDB, logger),
 		dailyFProcessor:   NewDailyActivityProcessor(oltpDB, olapDB, logger),
-		hourlyFProcessor:  NewHourlyActivityProcessor(oltpDB, olapDB, logger),
 	}
 }
 
@@ -88,15 +86,6 @@ func (t *Transformer) Transform(extractedData *models.ExtractedData) (*models.Tr
 		return nil, fmt.Errorf("ошибка при формировании ежедневных агрегатов: %w", err)
 	}
 	transformedData.DailyActivity = dailyActivityFacts
-
-	// 6. Формирование почасовых агрегатов активности
-	t.logger.Info("Формирование почасовых агрегатов активности...")
-	hourlyActivityFacts, err := t.hourlyFProcessor.ProcessHourlyActivity()
-	if err != nil {
-		t.logger.Error("Ошибка при формировании почасовых агрегатов: %v", err)
-		return nil, fmt.Errorf("ошибка при формировании почасовых агрегатов: %w", err)
-	}
-	transformedData.HourlyActivity = hourlyActivityFacts
 
 	// Заполняем метаданные
 	transformedData.Metadata = models.ETLMetadata{

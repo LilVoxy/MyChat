@@ -74,8 +74,7 @@ func (p *ChatFactsProcessor) ProcessChatFacts(chats []models.ChatOLTP, messages 
 		if !hasMsgs || len(msgs) == 0 {
 			// Если в чате нет сообщений, используем время создания чата для обоих time_id
 			dateKey := chat.CreatedAt.Format("2006-01-02")
-			hourKey := chat.CreatedAt.Hour()
-			startTimeID = p.getTimeID(timeIDMap, dateKey, hourKey)
+			startTimeID = p.getTimeID(timeIDMap, dateKey, 0)
 
 			if startTimeID == 0 {
 				// Если не найден ID, создаем новую запись в time_dimension
@@ -85,12 +84,6 @@ func (p *ChatFactsProcessor) ProcessChatFacts(chats []models.ChatOLTP, messages 
 					p.logger.Error("Не удалось создать запись в time_dimension для чата %d: %v", chat.ID, err)
 					continue // Пропускаем этот чат
 				}
-
-				// Обновляем маппинг
-				if _, ok := timeIDMap[dateKey]; !ok {
-					timeIDMap[dateKey] = make(map[int]int)
-				}
-				timeIDMap[dateKey][hourKey] = startTimeID
 			}
 
 			endTimeID = startTimeID
@@ -102,8 +95,7 @@ func (p *ChatFactsProcessor) ProcessChatFacts(chats []models.ChatOLTP, messages 
 
 			// Получаем время первого сообщения
 			firstDateKey := firstMsg.CreatedAt.Format("2006-01-02")
-			firstHourKey := firstMsg.CreatedAt.Hour()
-			startTimeID = p.getTimeID(timeIDMap, firstDateKey, firstHourKey)
+			startTimeID = p.getTimeID(timeIDMap, firstDateKey, 0)
 
 			if startTimeID == 0 {
 				// Если не найден ID, создаем новую запись в time_dimension
@@ -113,18 +105,11 @@ func (p *ChatFactsProcessor) ProcessChatFacts(chats []models.ChatOLTP, messages 
 					p.logger.Error("Не удалось создать запись в time_dimension для старта чата %d: %v", chat.ID, err)
 					continue // Пропускаем этот чат
 				}
-
-				// Обновляем маппинг
-				if _, ok := timeIDMap[firstDateKey]; !ok {
-					timeIDMap[firstDateKey] = make(map[int]int)
-				}
-				timeIDMap[firstDateKey][firstHourKey] = startTimeID
 			}
 
 			// Получаем время последнего сообщения
 			lastDateKey := lastMsg.CreatedAt.Format("2006-01-02")
-			lastHourKey := lastMsg.CreatedAt.Hour()
-			endTimeID = p.getTimeID(timeIDMap, lastDateKey, lastHourKey)
+			endTimeID = p.getTimeID(timeIDMap, lastDateKey, 0)
 
 			if endTimeID == 0 {
 				// Если не найден ID, создаем новую запись в time_dimension
@@ -134,12 +119,6 @@ func (p *ChatFactsProcessor) ProcessChatFacts(chats []models.ChatOLTP, messages 
 					p.logger.Error("Не удалось создать запись в time_dimension для окончания чата %d: %v", chat.ID, err)
 					continue // Пропускаем этот чат
 				}
-
-				// Обновляем маппинг
-				if _, ok := timeIDMap[lastDateKey]; !ok {
-					timeIDMap[lastDateKey] = make(map[int]int)
-				}
-				timeIDMap[lastDateKey][lastHourKey] = endTimeID
 			}
 
 			// Рассчитываем длительность чата в часах
@@ -213,37 +192,35 @@ func (p *ChatFactsProcessor) ProcessChatFacts(chats []models.ChatOLTP, messages 
 	return transformedChats, nil
 }
 
-// getTimeIDMapping получает маппинг дат и часов к time_id из OLAP базы данных
-func (p *ChatFactsProcessor) getTimeIDMapping() (map[string]map[int]int, error) {
-	timeIDMap := make(map[string]map[int]int)
+// getTimeIDMapping получает маппинг дат к time_id из OLAP базы данных
+func (p *ChatFactsProcessor) getTimeIDMapping() (map[string]int, error) {
+	timeIDMap := make(map[string]int)
 
-	// В реальной имплементации здесь был бы запрос к OLAP базе для получения маппинга
-	// Для прототипа создаем тестовые данные
-
-	// Создаем данные для последних 30 дней (для примера)
-	now := time.Now()
-	for i := 0; i < 30; i++ {
-		date := now.AddDate(0, 0, -i)
-		dateStr := date.Format("2006-01-02")
-		timeIDMap[dateStr] = make(map[int]int)
-
-		// Для каждого часа в дне
-		for hour := 0; hour < 24; hour++ {
-			// Генерируем простой ID на основе даты и часа
-			// В реальной системе ID были бы получены из базы данных
-			timeIDMap[dateStr][hour] = 1000 + i*100 + hour
-		}
+	rows, err := p.olapDB.Query(`
+		SELECT id, full_date
+		FROM chat_analytics.time_dimension
+		WHERE full_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка при запросе time_dimension: %w", err)
 	}
+	defer rows.Close()
 
+	for rows.Next() {
+		var id int
+		var dateStr string
+		if err := rows.Scan(&id, &dateStr); err != nil {
+			return nil, err
+		}
+		timeIDMap[dateStr] = id
+	}
 	return timeIDMap, nil
 }
 
-// getTimeID возвращает time_id для указанной даты и часа из маппинга
-func (p *ChatFactsProcessor) getTimeID(timeIDMap map[string]map[int]int, date string, hour int) int {
-	if hourMap, dateExists := timeIDMap[date]; dateExists {
-		if timeID, hourExists := hourMap[hour]; hourExists {
-			return timeID
-		}
+// getTimeID возвращает time_id для указанной даты из маппинга
+func (p *ChatFactsProcessor) getTimeID(timeIDMap map[string]int, date string, _ int) int {
+	if timeID, exists := timeIDMap[date]; exists {
+		return timeID
 	}
 	return 0 // Возвращаем 0, если не найдено
 }
@@ -254,8 +231,8 @@ func (p *ChatFactsProcessor) ensureTimeDimensionRecord(t time.Time) (int, error)
 	var id int
 	err := p.olapDB.QueryRow(`
 		SELECT id FROM chat_analytics.time_dimension 
-		WHERE full_date = ? AND hour_of_day = ?
-	`, t.Format("2006-01-02"), t.Hour()).Scan(&id)
+		WHERE full_date = ?
+	`, t.Format("2006-01-02")).Scan(&id)
 
 	if err == nil {
 		// Запись уже существует
@@ -288,14 +265,12 @@ func (p *ChatFactsProcessor) ensureTimeDimensionRecord(t time.Time) (int, error)
 	// Выходной день (суббота или воскресенье)
 	isWeekend := dayOfWeek == 1 || dayOfWeek == 7
 
-	hourOfDay := t.Hour()
-
 	// Вставляем запись
 	result, err := p.olapDB.Exec(`
 		INSERT INTO chat_analytics.time_dimension 
 		(full_date, year, quarter, month, month_name, week_of_year, 
-		day_of_month, day_of_week, day_name, is_weekend, hour_of_day) 
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		day_of_month, day_of_week, day_name, is_weekend) 
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		t.Format("2006-01-02"), // full_date
 		year,
@@ -307,7 +282,6 @@ func (p *ChatFactsProcessor) ensureTimeDimensionRecord(t time.Time) (int, error)
 		dayOfWeek,
 		dayName,
 		isWeekend,
-		hourOfDay,
 	)
 
 	if err != nil {
@@ -320,7 +294,7 @@ func (p *ChatFactsProcessor) ensureTimeDimensionRecord(t time.Time) (int, error)
 		return 0, fmt.Errorf("ошибка при получении ID новой записи time_dimension: %w", err)
 	}
 
-	p.logger.Debug("Создана новая запись в time_dimension для даты %s, часа %d, ID: %d",
-		t.Format("2006-01-02"), hourOfDay, lastID)
+	p.logger.Debug("Создана новая запись в time_dimension для даты %s, ID: %d",
+		t.Format("2006-01-02"), lastID)
 	return int(lastID), nil
 }

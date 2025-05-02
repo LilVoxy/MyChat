@@ -17,7 +17,6 @@ type TimeDimension struct {
 	DayOfWeek  int
 	DayName    string
 	IsWeekend  bool
-	HourOfDay  int
 }
 
 // UserDimension представляет измерение пользователей в OLAP
@@ -73,17 +72,6 @@ type DailyActivityFact struct {
 	AvgResponseTimeMinutes float64
 	PeakHour               int
 	PeakHourMessages       int
-}
-
-// HourlyActivityFact представляет факт почасовой активности в OLAP
-type HourlyActivityFact struct {
-	ID                     int
-	DateID                 int
-	HourOfDay              int
-	TotalMessages          int
-	TotalNewChats          int
-	ActiveUsers            int
-	AvgResponseTimeMinutes float64
 }
 
 // ETLMetadata содержит метаданные о запуске ETL
