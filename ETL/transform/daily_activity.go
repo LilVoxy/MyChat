@@ -40,11 +40,6 @@ func NewDailyActivityProcessor(oltpDB, olapDB *sql.DB, logger *utils.ETLLogger) 
 func (p *DailyActivityProcessor) ProcessDailyActivity() ([]models.DailyActivityFact, error) {
 	p.logger.Debug("Обработка ежедневной активности...")
 
-	// Получаем последние 30 дней для обновления агрегатов
-	// В реальной системе можно было бы обрабатывать только те дни,
-	// для которых есть новые данные
-	thirtyDaysAgo := time.Now().AddDate(0, 0, -30)
-
 	// Результирующий список фактов ежедневной активности
 	dailyFacts := make([]models.DailyActivityFact, 0)
 
@@ -54,10 +49,38 @@ func (p *DailyActivityProcessor) ProcessDailyActivity() ([]models.DailyActivityF
 		return nil, fmt.Errorf("ошибка при получении маппинга time_id: %w", err)
 	}
 
-	// Получаем данные о сообщениях и пользователях
-	messageData, userRegData, err := p.getActivityData(thirtyDaysAgo)
+	// Получаем данные о последнем запуске ETL для определения начальной точки
+	lastProcessedMessageID, err := p.getLastProcessedMessageID()
+	if err != nil {
+		p.logger.Error("Ошибка при получении последнего обработанного сообщения: %v. Будут обработаны все данные.", err)
+		lastProcessedMessageID = 0
+	}
+
+	p.logger.Info("Начало обработки данных начиная с ID сообщения: %d", lastProcessedMessageID)
+
+	// Получаем данные о сообщениях и пользователях, начиная с последнего обработанного ID
+	messageData, userRegData, err := p.getActivityDataFromLastID(lastProcessedMessageID)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка при получении данных активности: %w", err)
+	}
+
+	p.logger.Info("Получено сообщений: %d, данных о регистрациях: %d", len(messageData), len(userRegData))
+
+	// Определяем полный диапазон дат из полученных данных
+	dateRange := make(map[string]bool)
+	for _, msg := range messageData {
+		dateStr := msg.createdAt.Format("2006-01-02")
+		dateRange[dateStr] = true
+	}
+	for _, regDate := range userRegData {
+		dateStr := regDate.Format("2006-01-02")
+		dateRange[dateStr] = true
+	}
+
+	// Если данных нет, возвращаем пустой результат
+	if len(dateRange) == 0 {
+		p.logger.Info("Нет новых данных для обработки")
+		return dailyFacts, nil
 	}
 
 	// Группируем данные по датам
@@ -69,11 +92,8 @@ func (p *DailyActivityProcessor) ProcessDailyActivity() ([]models.DailyActivityF
 		messageCountByHour map[int]int // hour -> count
 	})
 
-	// Инициализируем структуру данных
-	now := time.Now()
-	for i := 0; i < 30; i++ {
-		date := now.AddDate(0, 0, -i)
-		dateStr := date.Format("2006-01-02")
+	// Инициализируем структуру данных для всех дат в диапазоне
+	for dateStr := range dateRange {
 		dailyData[dateStr] = struct {
 			messages           map[int][]messageInfo
 			newChats           int
@@ -123,6 +143,9 @@ func (p *DailyActivityProcessor) ProcessDailyActivity() ([]models.DailyActivityF
 			dailyData[dateStr] = data
 		}
 	}
+
+	// Карта для отслеживания уже обработанных date_id, чтобы избежать дубликатов
+	processedDateIDs := make(map[int]bool)
 
 	// Формируем факты ежедневной активности
 	for dateStr, data := range dailyData {
@@ -185,6 +208,12 @@ func (p *DailyActivityProcessor) ProcessDailyActivity() ([]models.DailyActivityF
 			timeIDMap[dateStr] = dateID
 		}
 
+		// Проверяем, не был ли этот date_id уже обработан
+		if processedDateIDs[dateID] {
+			p.logger.Debug("Пропуск даты %s (ID: %d), так как она уже обработана", dateStr, dateID)
+			continue
+		}
+
 		// Создаем факт ежедневной активности
 		dailyFact := models.DailyActivityFact{
 			DateID:                 dateID,
@@ -198,6 +227,9 @@ func (p *DailyActivityProcessor) ProcessDailyActivity() ([]models.DailyActivityF
 			PeakHourMessages:       peakHourMessages,
 		}
 
+		// Отмечаем этот date_id как обработанный
+		processedDateIDs[dateID] = true
+
 		// Добавляем факт в результат
 		dailyFacts = append(dailyFacts, dailyFact)
 	}
@@ -206,7 +238,126 @@ func (p *DailyActivityProcessor) ProcessDailyActivity() ([]models.DailyActivityF
 	return dailyFacts, nil
 }
 
+// getLastProcessedMessageID получает ID последнего обработанного сообщения из журнала ETL
+func (p *DailyActivityProcessor) getLastProcessedMessageID() (int, error) {
+	var lastID int
+	err := p.olapDB.QueryRow(`
+		SELECT last_processed_message_id 
+		FROM etl_runs 
+		WHERE status = 'success' 
+		ORDER BY end_time DESC 
+		LIMIT 1
+	`).Scan(&lastID)
+
+	if err != nil {
+		return 0, err
+	}
+	return lastID, nil
+}
+
+// getActivityDataFromLastID получает данные о сообщениях и регистрациях пользователей для анализа
+// начиная с последнего обработанного ID сообщения
+func (p *DailyActivityProcessor) getActivityDataFromLastID(lastProcessedMessageID int) ([]messageInfo, []time.Time, error) {
+	// Получаем сообщения из OLTP начиная с указанного ID
+	rows, err := p.oltpDB.Query(`
+		SELECT id, chat_id, sender_id, created_at
+		FROM messages
+		WHERE id > ?
+		ORDER BY id
+	`, lastProcessedMessageID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	var messages []messageInfo
+	for rows.Next() {
+		var m messageInfo
+		if err := rows.Scan(&m.id, &m.chatID, &m.senderID, &m.createdAt); err != nil {
+			return nil, nil, err
+		}
+		messages = append(messages, m)
+	}
+
+	// Если нет новых сообщений, получаем хотя бы минимальную дату для регистраций пользователей
+	var minProcessedDate time.Time
+	if len(messages) > 0 {
+		// Находим самую раннюю дату среди новых сообщений
+		minProcessedDate = messages[0].createdAt
+		for _, msg := range messages {
+			if msg.createdAt.Before(minProcessedDate) {
+				minProcessedDate = msg.createdAt
+			}
+		}
+	} else {
+		// Если сообщений нет, используем дату из последнего успешного запуска
+		err := p.olapDB.QueryRow(`
+			SELECT end_time 
+			FROM etl_runs 
+			WHERE status = 'success' 
+			ORDER BY end_time DESC 
+			LIMIT 1
+		`).Scan(&minProcessedDate)
+
+		if err != nil {
+			// Если и это не удалось, берем дату на месяц назад
+			minProcessedDate = time.Now().AddDate(0, -1, 0)
+		}
+	}
+
+	// Группируем сообщения по чатам (создаем карту индексов, а не указателей)
+	chatMessageIndices := make(map[int][]int)
+	for i := range messages {
+		chatMessageIndices[messages[i].chatID] = append(chatMessageIndices[messages[i].chatID], i)
+	}
+
+	// Для каждого чата сортируем сообщения по времени и вычисляем isFirstInChat/responseTime
+	for _, indices := range chatMessageIndices {
+		// Сортируем индексы по времени сообщений
+		sort.Slice(indices, func(i, j int) bool {
+			return messages[indices[i]].createdAt.Before(messages[indices[j]].createdAt)
+		})
+
+		// Помечаем первое сообщение и вычисляем время ответа
+		for i, idx := range indices {
+			if i == 0 {
+				messages[idx].isFirstInChat = true
+				messages[idx].responseTime = 0
+			} else {
+				messages[idx].isFirstInChat = false
+				prevIdx := indices[i-1]
+				if messages[idx].senderID != messages[prevIdx].senderID {
+					messages[idx].responseTime = messages[idx].createdAt.Sub(messages[prevIdx].createdAt).Minutes()
+				} else {
+					messages[idx].responseTime = 0
+				}
+			}
+		}
+	}
+
+	// Получаем даты регистрации пользователей, начиная с минимальной даты обработки
+	userRows, err := p.oltpDB.Query(`
+		SELECT created_at FROM users WHERE created_at >= ?
+	`, minProcessedDate)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer userRows.Close()
+
+	var registrationDates []time.Time
+	for userRows.Next() {
+		var reg time.Time
+		if err := userRows.Scan(&reg); err != nil {
+			return nil, nil, err
+		}
+		registrationDates = append(registrationDates, reg)
+	}
+
+	return messages, registrationDates, nil
+}
+
 // getActivityData получает данные о сообщениях и регистрациях пользователей для анализа
+// УСТАРЕВШИЙ метод, использовался для получения данных за фиксированный период
 func (p *DailyActivityProcessor) getActivityData(since time.Time) ([]messageInfo, []time.Time, error) {
 	// Получаем сообщения из OLTP
 	rows, err := p.oltpDB.Query(`
@@ -283,10 +434,10 @@ func (p *DailyActivityProcessor) getActivityData(since time.Time) ([]messageInfo
 func (p *DailyActivityProcessor) getTimeIDMapping() (map[string]int, error) {
 	timeIDMap := make(map[string]int)
 
+	// Получаем все записи из time_dimension, а не только за последние 30 дней
 	rows, err := p.olapDB.Query(`
 		SELECT id, full_date
 		FROM chat_analytics.time_dimension
-		WHERE full_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка при запросе time_dimension: %w", err)

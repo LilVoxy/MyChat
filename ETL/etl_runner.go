@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/LilVoxy/coursework_chat/ETL/config"
 	"github.com/LilVoxy/coursework_chat/ETL/extractors"
+	"github.com/LilVoxy/coursework_chat/ETL/linear_regression"
 	"github.com/LilVoxy/coursework_chat/ETL/load"
 	"github.com/LilVoxy/coursework_chat/ETL/models"
 	"github.com/LilVoxy/coursework_chat/ETL/transform"
@@ -159,6 +161,14 @@ func (r *ETLRunner) ExecuteETL() error {
 		return fmt.Errorf("ошибка в фазе Load: %w", err)
 	}
 
+	// 4. Запускаем линейную регрессию для прогнозирования трендов активности
+	r.logger.Info("Запуск линейной регрессии для прогнозирования трендов активности")
+	if err := r.runLinearRegression(); err != nil {
+		r.logger.Error("Ошибка при выполнении линейной регрессии: %v", err)
+		// Не прерываем ETL процесс из-за ошибки в линейной регрессии
+		// Это некритичный компонент
+	}
+
 	// Обновляем запись в журнале с информацией об успешном выполнении
 	r.updateETLRunLogSuccess(runLog,
 		len(extractedData.Users),
@@ -273,16 +283,75 @@ func RunScheduled() {
 	runner.StartScheduler(ctx)
 }
 
+// runLinearRegression запускает процесс линейной регрессии
+func (r *ETLRunner) runLinearRegression() error {
+	// Используем стандартную конфигурацию
+	config := linear_regression.DefaultConfig()
+
+	// Запускаем линейную регрессию с использованием OLAP базы данных
+	return linear_regression.RunWithCustomConfig(r.dbConnections.OLAPDB, r.logger, config)
+}
+
+// runLinearRegressionWithParams запускает процесс линейной регрессии с пользовательскими параметрами
+func (r *ETLRunner) runLinearRegressionWithParams(days, forecast int, confidence, minR2 float64) error {
+	// Создаем конфигурацию с пользовательскими параметрами
+	config := linear_regression.Config{
+		AnalysisPeriodDays: days,
+		ForecastDays:       forecast,
+		ConfidenceLevel:    confidence,
+		MinR2Threshold:     minR2,
+	}
+
+	r.logger.Info("Запуск линейной регрессии с параметрами: дней=%d, прогноз=%d дней, доверие=%.2f, минR²=%.2f",
+		days, forecast, confidence, minR2)
+
+	// Запускаем линейную регрессию с пользовательской конфигурацией
+	return linear_regression.RunWithCustomConfig(r.dbConnections.OLAPDB, r.logger, config)
+}
+
+// RunLinearRegression запускает только линейную регрессию с пользовательскими параметрами
+func RunLinearRegression(days, forecast int, confidence, minR2 float64) {
+	log.Println("Запуск утилиты линейной регрессии")
+
+	// Создаем ETL Runner
+	runner, err := NewETLRunner()
+	if err != nil {
+		log.Fatalf("Ошибка при создании ETL Runner: %v", err)
+	}
+	defer runner.Close()
+
+	// Запускаем только линейную регрессию
+	if err := runner.runLinearRegressionWithParams(days, forecast, confidence, minR2); err != nil {
+		log.Fatalf("Ошибка при выполнении линейной регрессии: %v", err)
+	}
+
+	log.Println("Линейная регрессия успешно завершена")
+}
+
 func main() {
-	log.Println("Запуск ETL Runner")
+	// Параметры командной строки
+	modePtr := flag.String("mode", "scheduled", "Режим работы: scheduled, once или lr")
+	daysPtr := flag.Int("days", 30, "Количество дней для анализа (только для режима lr)")
+	forecastPtr := flag.Int("forecast", 14, "Количество дней для прогноза (только для режима lr)")
+	confidencePtr := flag.Float64("confidence", 0.95, "Уровень доверия (только для режима lr)")
+	minR2Ptr := flag.Float64("min-r2", 0.30, "Минимальный порог для R² (только для режима lr)")
 
-	// По умолчанию запускаем в режиме планировщика
-	// Можно добавить аргументы командной строки для выбора режима
-	// Например: etl_runner -mode=once или etl_runner -mode=scheduled
-	RunScheduled()
+	flag.Parse()
 
-	// Для запуска один раз:
-	// RunOnce()
+	log.Println("Запуск ETL Runner в режиме:", *modePtr)
+
+	switch *modePtr {
+	case "once":
+		RunOnce()
+	case "scheduled":
+		RunScheduled()
+	case "lr":
+		RunLinearRegression(*daysPtr, *forecastPtr, *confidencePtr, *minR2Ptr)
+	default:
+		log.Println("Неизвестный режим работы:", *modePtr)
+		log.Println("Доступные режимы: scheduled, once, lr")
+		os.Exit(1)
+	}
 
 	log.Println("ETL Runner завершил работу")
 }

@@ -108,7 +108,7 @@ func (p *MessageFactsProcessor) ProcessMessageFacts(messages []models.MessageOLT
 			if timeID == 0 {
 				var err error
 				timeID, err = p.ensureTimeDimensionRecord(msg.CreatedAt)
-				if err != nil {
+			if err != nil {
 					p.logger.Error("Не удалось создать запись в time_dimension для сообщения %d: %v", msg.ID, err)
 					continue // Пропускаем это сообщение
 				}
@@ -244,3 +244,4 @@ func (p *MessageFactsProcessor) ensureTimeDimensionRecord(t time.Time) (int, err
 		t.Format("2006-01-02"), lastID)
 	return int(lastID), nil
 }
+ 
