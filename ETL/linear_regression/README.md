@@ -145,3 +145,7 @@ RoundedValue = round(value * 1000) / 1000
 - Коэффициенту детерминации (R²)
 - Прогнозным значениям
 - Границам доверительного интервала 
+
+# Запуск
+
+- go run ETL/etl_runner.go -mode=lr -days=30 -forecast=14 confidence=0.95 -min-r2=0.30
