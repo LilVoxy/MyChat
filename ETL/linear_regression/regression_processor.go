@@ -56,6 +56,7 @@ func NewRegressionProcessor(
 
 // Process выполняет основной процесс: анализ данных, построение модели и сохранение прогнозов
 func (p *RegressionProcessor) Process() error {
+	startTime := time.Now()
 	p.logger.Info("Запуск процесса линейной регрессии для прогнозирования активности")
 
 	// 1. Убеждаемся, что таблица существует
@@ -83,6 +84,11 @@ func (p *RegressionProcessor) Process() error {
 	p.logger.Info("Результаты модели: коэффициент наклона (a)=%.3f, сдвиг (b)=%.3f, R=%.3f, R²=%.3f",
 		regressionResult.A, regressionResult.B, regressionResult.R, regressionResult.R2)
 
+	// Логируем информацию о периоде анализа
+	p.logger.Info("Период анализа: с %v по %v",
+		regressionResult.PeriodStart.Format("2006-01-02"),
+		regressionResult.PeriodEnd.Format("2006-01-02"))
+
 	// Если модель недостаточно хороша, логируем предупреждение
 	if regressionResult.R2 < p.config.MinR2Threshold {
 		p.logger.Info("Низкое качество модели (R²=%.3f < %.3f). Однако прогноз будет сделан.",
@@ -90,7 +96,9 @@ func (p *RegressionProcessor) Process() error {
 	}
 
 	// 5. Генерируем прогнозы
-	p.logger.Info("Генерация прогнозов на %d дней вперед", p.config.ForecastDays)
+	p.logger.Info("Генерация прогнозов на %d дней вперед от %v",
+		p.config.ForecastDays,
+		regressionResult.PeriodEnd.Format("2006-01-02"))
 	forecasts := GenerateForecasts(regressionResult, p.config.ForecastDays, p.config.ConfidenceLevel)
 
 	// 6. Сохраняем прогнозы в БД
@@ -106,7 +114,8 @@ func (p *RegressionProcessor) Process() error {
 		p.logger.Info("Не удалось удалить устаревшие прогнозы: %v", err)
 	}
 
-	p.logger.Info("Процесс линейной регрессии успешно завершен")
+	executionTime := time.Since(startTime)
+	p.logger.Info("Процесс линейной регрессии успешно завершен. Время выполнения: %v", executionTime)
 	return nil
 }
 

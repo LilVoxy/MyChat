@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/LilVoxy/coursework_chat/ETL/chatrank"
 	"github.com/LilVoxy/coursework_chat/ETL/config"
 	"github.com/LilVoxy/coursework_chat/ETL/extractors"
 	"github.com/LilVoxy/coursework_chat/ETL/linear_regression"
@@ -21,14 +22,15 @@ import (
 )
 
 type ETLRunner struct {
-	config          config.ETLConfig
-	dbConnections   *config.DBConnections
-	logger          *utils.ETLLogger
-	extractor       *extractors.Extractor
-	transformer     *transform.Transformer
-	loadManager     *load.LoadManager
-	etlLogRepo      models.ETLLogRepository
-	lastRunMetadata models.ETLMetadata
+	config            config.ETLConfig
+	dbConnections     *config.DBConnections
+	logger            *utils.ETLLogger
+	extractor         *extractors.Extractor
+	transformer       *transform.Transformer
+	loadManager       *load.LoadManager
+	etlLogRepo        models.ETLLogRepository
+	lastRunMetadata   models.ETLMetadata
+	chatRankProcessor *chatrank.ChatRankProcessor
 }
 
 // NewETLRunner создает новый экземпляр ETLRunner
@@ -63,14 +65,18 @@ func NewETLRunner() (*ETLRunner, error) {
 	// Создаем загрузчик
 	loadManager := load.NewLoadManager(connections.OLAPDB, logger)
 
+	// Создаем процессор ChatRank
+	chatRankProcessor := chatrank.NewChatRankProcessor(connections.OLTPDB, connections.OLAPDB, logger)
+
 	return &ETLRunner{
-		config:        etlConfig,
-		dbConnections: connections,
-		logger:        logger,
-		extractor:     extractor,
-		transformer:   transformer,
-		loadManager:   loadManager,
-		etlLogRepo:    etlLogRepo,
+		config:            etlConfig,
+		dbConnections:     connections,
+		logger:            logger,
+		extractor:         extractor,
+		transformer:       transformer,
+		loadManager:       loadManager,
+		etlLogRepo:        etlLogRepo,
+		chatRankProcessor: chatRankProcessor,
 	}, nil
 }
 
@@ -166,6 +172,14 @@ func (r *ETLRunner) ExecuteETL() error {
 	if err := r.runLinearRegression(); err != nil {
 		r.logger.Error("Ошибка при выполнении линейной регрессии: %v", err)
 		// Не прерываем ETL процесс из-за ошибки в линейной регрессии
+		// Это некритичный компонент
+	}
+
+	// 5. Запускаем ChatRank для определения влиятельности пользователей
+	r.logger.Info("Запуск ChatRank для определения влиятельности пользователей")
+	if err := r.runChatRank(); err != nil {
+		r.logger.Error("Ошибка при выполнении ChatRank: %v", err)
+		// Не прерываем ETL процесс из-за ошибки в ChatRank
 		// Это некритичный компонент
 	}
 
@@ -312,6 +326,7 @@ func (r *ETLRunner) runLinearRegressionWithParams(days, forecast int, confidence
 // RunLinearRegression запускает только линейную регрессию с пользовательскими параметрами
 func RunLinearRegression(days, forecast int, confidence, minR2 float64) {
 	log.Println("Запуск утилиты линейной регрессии")
+	startTime := time.Now()
 
 	// Создаем ETL Runner
 	runner, err := NewETLRunner()
@@ -325,16 +340,87 @@ func RunLinearRegression(days, forecast int, confidence, minR2 float64) {
 		log.Fatalf("Ошибка при выполнении линейной регрессии: %v", err)
 	}
 
-	log.Println("Линейная регрессия успешно завершена")
+	executionTime := time.Since(startTime)
+	log.Printf("Линейная регрессия успешно завершена. Общее время выполнения: %v", executionTime)
+}
+
+// runChatRank запускает процесс ChatRank
+func (r *ETLRunner) runChatRank() error {
+	// Используем стандартную конфигурацию
+	return r.chatRankProcessor.Process()
+}
+
+// runChatRankWithParams запускает процесс ChatRank с пользовательскими параметрами
+func (r *ETLRunner) runChatRankWithParams(
+	damping float64,
+	maxIterations int,
+	epsilon float64,
+	timeFactor, responseFactor, lengthFactor, continuationFactor float64) error {
+
+	// Создаем пользовательскую конфигурацию
+	config := chatrank.ChatRankConfig{
+		DampingFactor:      damping,
+		MaxIterations:      maxIterations,
+		ConvergenceEpsilon: epsilon,
+		TimeFactor:         timeFactor,
+		ResponseFactor:     responseFactor,
+		LengthFactor:       lengthFactor,
+		ContinuationFactor: continuationFactor,
+	}
+
+	r.logger.Info("Запуск ChatRank с параметрами: damping=%.2f, iterations=%d, epsilon=%.6f, веса=[%.2f, %.2f, %.2f, %.2f]",
+		damping, maxIterations, epsilon, timeFactor, responseFactor, lengthFactor, continuationFactor)
+
+	// Запускаем ChatRank с пользовательской конфигурацией
+	return r.chatRankProcessor.ProcessWithCustomConfig(config)
+}
+
+// RunChatRank запускает только ChatRank
+func RunChatRank(
+	damping float64,
+	maxIterations int,
+	epsilon float64,
+	timeFactor, responseFactor, lengthFactor, continuationFactor float64) {
+
+	log.Println("Запуск утилиты ChatRank")
+	startTime := time.Now()
+
+	// Создаем ETL Runner
+	runner, err := NewETLRunner()
+	if err != nil {
+		log.Fatalf("Ошибка при создании ETL Runner: %v", err)
+	}
+	defer runner.Close()
+
+	// Запускаем только ChatRank
+	if err := runner.runChatRankWithParams(
+		damping, maxIterations, epsilon,
+		timeFactor, responseFactor, lengthFactor, continuationFactor); err != nil {
+		log.Fatalf("Ошибка при выполнении ChatRank: %v", err)
+	}
+
+	executionTime := time.Since(startTime)
+	log.Printf("ChatRank успешно завершен. Общее время выполнения: %v", executionTime)
 }
 
 func main() {
 	// Параметры командной строки
-	modePtr := flag.String("mode", "scheduled", "Режим работы: scheduled, once или lr")
+	modePtr := flag.String("mode", "scheduled", "Режим работы: scheduled, once, lr или cr")
+
+	// Параметры для линейной регрессии
 	daysPtr := flag.Int("days", 30, "Количество дней для анализа (только для режима lr)")
 	forecastPtr := flag.Int("forecast", 14, "Количество дней для прогноза (только для режима lr)")
 	confidencePtr := flag.Float64("confidence", 0.95, "Уровень доверия (только для режима lr)")
 	minR2Ptr := flag.Float64("min-r2", 0.30, "Минимальный порог для R² (только для режима lr)")
+
+	// Параметры для ChatRank
+	dampingPtr := flag.Float64("damping", 0.85, "Коэффициент затухания (только для режима cr)")
+	iterationsPtr := flag.Int("iterations", 100, "Максимальное количество итераций (только для режима cr)")
+	epsilonPtr := flag.Float64("epsilon", 0.0001, "Порог сходимости (только для режима cr)")
+	timeFactorPtr := flag.Float64("time-factor", 0.25, "Вес временного фактора (только для режима cr)")
+	responseFactorPtr := flag.Float64("response-factor", 0.25, "Вес фактора частоты ответов (только для режима cr)")
+	lengthFactorPtr := flag.Float64("length-factor", 0.25, "Вес фактора длины сообщений (только для режима cr)")
+	continuationFactorPtr := flag.Float64("continuation-factor", 0.25, "Вес фактора продолжения беседы (только для режима cr)")
 
 	flag.Parse()
 
@@ -347,9 +433,12 @@ func main() {
 		RunScheduled()
 	case "lr":
 		RunLinearRegression(*daysPtr, *forecastPtr, *confidencePtr, *minR2Ptr)
+	case "cr":
+		RunChatRank(*dampingPtr, *iterationsPtr, *epsilonPtr,
+			*timeFactorPtr, *responseFactorPtr, *lengthFactorPtr, *continuationFactorPtr)
 	default:
 		log.Println("Неизвестный режим работы:", *modePtr)
-		log.Println("Доступные режимы: scheduled, once, lr")
+		log.Println("Доступные режимы: scheduled, once, lr, cr")
 		os.Exit(1)
 	}
 

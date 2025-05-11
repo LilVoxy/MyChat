@@ -56,10 +56,49 @@ func (e *Extractor) Extract(lastRunTime time.Time, lastProcessedMessageID int) (
 	}
 
 	// Извлекаем сообщения
-	extractedData.Messages, err = e.messageExtractor.ExtractMessages(lastRunTime, lastProcessedMessageID, e.batchSize)
+	extractedData.Messages, err = e.messageExtractor.ExtractMessages(time.Time{}, lastProcessedMessageID, e.batchSize)
 	if err != nil {
 		e.logger.Error("Ошибка при извлечении сообщений: %v", err)
 		return nil, fmt.Errorf("ошибка извлечения сообщений: %w", err)
+	}
+
+	// Дополнительно извлекаем чаты, связанные с извлеченными сообщениями, но не попавшие в выборку BatchSize
+	chatIDs := make(map[int]bool)
+	existingChatIDs := make(map[int]bool)
+
+	// Создаем карту существующих чатов
+	for _, chat := range extractedData.Chats {
+		existingChatIDs[chat.ID] = true
+	}
+
+	// Собираем ID всех чатов из сообщений
+	for _, msg := range extractedData.Messages {
+		chatIDs[msg.ChatID] = true
+	}
+
+	// Находим ID чатов, которые есть в сообщениях, но отсутствуют в извлеченных чатах
+	var missingChatIDs []int
+	for chatID := range chatIDs {
+		if !existingChatIDs[chatID] {
+			missingChatIDs = append(missingChatIDs, chatID)
+		}
+	}
+
+	// Если есть отсутствующие чаты, извлекаем их
+	if len(missingChatIDs) > 0 {
+		e.logger.Debug("Найдено %d отсутствующих чатов, связанных с сообщениями. Извлекаем дополнительно.", len(missingChatIDs))
+
+		chatMap, err := e.chatExtractor.GetChatsByIDs(missingChatIDs)
+		if err != nil {
+			e.logger.Error("Ошибка при извлечении дополнительных чатов: %v", err)
+			// Продолжаем выполнение, т.к. это некритичная ошибка
+		} else {
+			// Добавляем найденные чаты к основному списку
+			for _, chat := range chatMap {
+				extractedData.Chats = append(extractedData.Chats, chat)
+			}
+			e.logger.Debug("Дополнительно извлечено %d чатов", len(chatMap))
+		}
 	}
 
 	// Записываем время запуска

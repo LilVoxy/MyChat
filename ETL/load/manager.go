@@ -77,7 +77,7 @@ func (m *LoadManager) Load(transformedData *models.TransformedData) error {
 func (m *LoadManager) UpdateETLRunLog(runLog *models.ETLRunLog) error {
 	// Подготавливаем запрос для обновления журнала запусков
 	stmt, err := m.db.Prepare(`
-		UPDATE etl_runs
+		UPDATE etl_run_log
 		SET 
 			end_time = ?,
 			status = ?,

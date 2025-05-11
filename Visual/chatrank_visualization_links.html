@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Визуализация связей между пользователями</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-gap: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .card {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        
+        h1, h2 {
+            color: #333;
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        h2 {
+            margin-top: 0;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+        }
+        
+        .graph-container {
+            width: 100%;
+            height: 400px;
+            position: relative;
+        }
+        
+        .links-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .links-table th, .links-table td {
+            padding: 8px 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .links-table th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+        
+        .links-table tbody tr:hover {
+            background-color: #f5f5f5;
+        }
+        
+        .low {
+            color: #2196F3;
+        }
+        
+        .medium {
+            color: #4CAF50;
+        }
+        
+        .high {
+            color: #FF5252;
+        }
+        
+        .tooltip {
+            position: absolute;
+            padding: 8px;
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            pointer-events: none;
+            font-size: 12px;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+    <h1>Визуализация связей между пользователями (ChatRank)</h1>
+    
+    <div class="container">
+        <div class="card">
+            <h2>Граф связей между пользователями</h2>
+            <div id="graph" class="graph-container"></div>
+        </div>
+        
+        <div class="card">
+            <h2>Распределение весов связей</h2>
+            <div>
+                <canvas id="weightDistribution"></canvas>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h2>Факторы связей</h2>
+            <div>
+                <canvas id="factorsChart"></canvas>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h2>Таблица связей</h2>
+            <table class="links-table">
+                <thead>
+                    <tr>
+                        <th>Отправитель</th>
+                        <th>Ранг</th>
+                        <th>Получатель</th>
+                        <th>Ранг</th>
+                        <th>Вес связи</th>
+                    </tr>
+                </thead>
+                <tbody id="linksTableBody">
+                    <!-- Данные будут загружены с помощью JavaScript -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // Загрузка данных из CSV-файла
+        d3.csv('связи пользователей.csv').then(data => {
+            // Конвертируем строковые значения в числа
+            data.forEach(d => {
+                d.sender_id = +d.sender_id;
+                d.sender_rank = +d.sender_rank;
+                d.recipient_id = +d.recipient_id;
+                d.recipient_rank = +d.recipient_rank;
+                d.weight = +d.weight;
+                d.time_factor = +d.time_factor;
+                d.response_factor = +d.response_factor;
+                d.length_factor = +d.length_factor;
+                d.continuation_factor = +d.continuation_factor;
+            });
+            
+            // Визуализируем данные
+            createNetworkGraph(data);
+            createWeightDistribution(data);
+            createFactorsChart(data);
+            populateTable(data);
+        }).catch(error => {
+            console.error('Ошибка загрузки данных:', error);
+            document.body.innerHTML = '<div style="text-align: center; margin-top: 50px;"><h2>Ошибка загрузки данных</h2><p>Убедитесь, что файл "связи пользователей.csv" находится в той же папке, что и HTML-файл.</p></div>';
+        });
+        
+        // Функция для создания графа связей
+        function createNetworkGraph(data) {
+            // Получаем уникальные идентификаторы пользователей
+            const userIds = new Set();
+            data.forEach(d => {
+                userIds.add(d.sender_id);
+                userIds.add(d.recipient_id);
+            });
+            
+            // Создаем набор узлов
+            const nodes = Array.from(userIds).map(id => {
+                // Находим первую запись с этим ID, чтобы получить информацию о пользователе
+                const asSender = data.find(d => d.sender_id === id);
+                const asRecipient = data.find(d => d.recipient_id === id);
+                
+                // Используем данные из записи, где пользователь является отправителем, если доступны
+                if (asSender) {
+                    return {
+                        id: id,
+                        rank: asSender.sender_rank,
+                        category: asSender.sender_category
+                    };
+                } else {
+                    return {
+                        id: id,
+                        rank: asRecipient.recipient_rank,
+                        category: asRecipient.recipient_category
+                    };
+                }
+            });
+            
+            // Подготавливаем связи в формате, необходимом для D3
+            const links = data.map(d => ({
+                source: d.sender_id,
+                target: d.recipient_id,
+                weight: d.weight
+            }));
+            
+            // Настраиваем размеры графа
+            const width = document.getElementById('graph').clientWidth;
+            const height = document.getElementById('graph').clientHeight;
+            
+            // Создаем SVG
+            const svg = d3.select('#graph')
+                .append('svg')
+                .attr('width', width)
+                .attr('height', height);
+                
+            // Добавляем поддержку масштабирования и перетаскивания
+            const g = svg.append('g');
+            
+            svg.call(d3.zoom()
+                .scaleExtent([0.1, 4])
+                .on('zoom', (event) => {
+                    g.attr('transform', event.transform);
+                }));
+            
+            // Создаем tooltip
+            const tooltip = d3.select('body').append('div')
+                .attr('class', 'tooltip')
+                .style('opacity', 0);
+            
+            // Создаем симуляцию
+            const simulation = d3.forceSimulation(nodes)
+                .force('link', d3.forceLink(links).id(d => d.id).distance(100))
+                .force('charge', d3.forceManyBody().strength(-300))
+                .force('center', d3.forceCenter(width / 2, height / 2))
+                .force('collision', d3.forceCollide().radius(30));
+            
+            // Отрисовываем связи
+            const link = g.append('g')
+                .selectAll('line')
+                .data(links)
+                .enter().append('line')
+                .attr('stroke-width', d => d.weight * 3)
+                .attr('stroke', '#999')
+                .attr('stroke-opacity', 0.6);
+            
+            // Отрисовываем узлы
+            const node = g.append('g')
+                .selectAll('circle')
+                .data(nodes)
+                .enter().append('circle')
+                .attr('r', 10)
+                .attr('fill', d => {
+                    if (d.category === 'high') return '#FF5252';
+                    if (d.category === 'medium') return '#4CAF50';
+                    return '#2196F3';
+                })
+                .attr('stroke', '#fff')
+                .attr('stroke-width', 1.5)
+                .call(d3.drag()
+                    .on('start', dragstarted)
+                    .on('drag', dragged)
+                    .on('end', dragended));
+            
+            // Добавляем подписи к узлам
+            const labels = g.append('g')
+                .selectAll('text')
+                .data(nodes)
+                .enter().append('text')
+                .attr('dx', 12)
+                .attr('dy', '.35em')
+                .text(d => d.id)
+                .style('font-size', '10px');
+            
+            // Добавляем интерактивность
+            node.on('mouseover', (event, d) => {
+                tooltip.transition()
+                    .duration(200)
+                    .style('opacity', .9);
+                tooltip.html(`ID: ${d.id}<br>Ранг: ${d.rank.toFixed(3)}<br>Категория: ${d.category}`)
+                    .style('left', (event.pageX + 10) + 'px')
+                    .style('top', (event.pageY - 28) + 'px');
+            })
+            .on('mouseout', () => {
+                tooltip.transition()
+                    .duration(500)
+                    .style('opacity', 0);
+            });
+            
+            // Обновляем положение элементов при каждом тике симуляции
+            simulation.on('tick', () => {
+                link
+                    .attr('x1', d => d.source.x)
+                    .attr('y1', d => d.source.y)
+                    .attr('x2', d => d.target.x)
+                    .attr('y2', d => d.target.y);
+                
+                node
+                    .attr('cx', d => d.x)
+                    .attr('cy', d => d.y);
+                
+                labels
+                    .attr('x', d => d.x)
+                    .attr('y', d => d.y);
+            });
+            
+            // Функции для поддержки перетаскивания
+            function dragstarted(event, d) {
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                d.fx = d.x;
+                d.fy = d.y;
+            }
+            
+            function dragged(event, d) {
+                d.fx = event.x;
+                d.fy = event.y;
+            }
+            
+            function dragended(event, d) {
+                if (!event.active) simulation.alphaTarget(0);
+                d.fx = null;
+                d.fy = null;
+            }
+        }
+        
+        // Функция для создания диаграммы распределения весов
+        function createWeightDistribution(data) {
+            // Подготавливаем данные для диаграммы
+            const weights = data.map(d => d.weight);
+            
+            // Создаем гистограмму с помощью Chart.js
+            const ctx = document.getElementById('weightDistribution').getContext('2d');
+            new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: data.map((d, i) => `${d.sender_id} → ${d.recipient_id}`),
+                    datasets: [{
+                        label: 'Вес связи',
+                        data: weights,
+                        backgroundColor: weights.map(w => {
+                            if (w >= 0.7) return 'rgba(255, 82, 82, 0.7)'; // high
+                            if (w >= 0.65) return 'rgba(76, 175, 80, 0.7)'; // medium
+                            return 'rgba(33, 150, 243, 0.7)'; // low
+                        }),
+                        borderColor: weights.map(w => {
+                            if (w >= 0.7) return 'rgb(255, 82, 82)'; // high
+                            if (w >= 0.65) return 'rgb(76, 175, 80)'; // medium
+                            return 'rgb(33, 150, 243)'; // low
+                        }),
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Вес связи'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            callbacks: {
+                                title: function(tooltipItems) {
+                                    const i = tooltipItems[0].dataIndex;
+                                    return `Связь: ${data[i].sender_id} → ${data[i].recipient_id}`;
+                                },
+                                label: function(context) {
+                                    const i = context.dataIndex;
+                                    return [
+                                        `Вес: ${weights[i].toFixed(3)}`,
+                                        `Отправитель: ID ${data[i].sender_id} (${data[i].sender_category})`,
+                                        `Получатель: ID ${data[i].recipient_id} (${data[i].recipient_category})`
+                                    ];
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Функция для создания диаграммы факторов
+        function createFactorsChart(data) {
+            // Подготавливаем данные о средних значениях факторов
+            const avgTimeFactor = d3.mean(data, d => d.time_factor);
+            const avgResponseFactor = d3.mean(data, d => d.response_factor);
+            const avgLengthFactor = d3.mean(data, d => d.length_factor);
+            const avgContinuationFactor = d3.mean(data, d => d.continuation_factor);
+            
+            // Создаем радарную диаграмму
+            const ctx = document.getElementById('factorsChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'radar',
+                data: {
+                    labels: ['Временной фактор', 'Фактор ответов', 'Фактор длины сообщений', 'Фактор длины диалога'],
+                    datasets: [{
+                        label: 'Средние значения факторов',
+                        data: [avgTimeFactor, avgResponseFactor, avgLengthFactor, avgContinuationFactor],
+                        backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                        borderColor: 'rgb(54, 162, 235)',
+                        pointBackgroundColor: 'rgb(54, 162, 235)',
+                        pointBorderColor: '#fff',
+                        pointHoverBackgroundColor: '#fff',
+                        pointHoverBorderColor: 'rgb(54, 162, 235)'
+                    }]
+                },
+                options: {
+                    elements: {
+                        line: {
+                            borderWidth: 3
+                        }
+                    },
+                    scales: {
+                        r: {
+                            angleLines: {
+                                display: true
+                            },
+                            suggestedMin: 0,
+                            suggestedMax: 1
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Функция для заполнения таблицы связей
+        function populateTable(data) {
+            const tableBody = document.getElementById('linksTableBody');
+            
+            // Сортируем данные по весу связи (от большего к меньшему)
+            data.sort((a, b) => b.weight - a.weight);
+            
+            // Заполняем таблицу
+            data.forEach(d => {
+                const row = document.createElement('tr');
+                
+                // Добавляем ячейки с данными
+                row.innerHTML = `
+                    <td>ID ${d.sender_id}</td>
+                    <td class="${d.sender_category}">${d.sender_rank.toFixed(3)}</td>
+                    <td>ID ${d.recipient_id}</td>
+                    <td class="${d.recipient_category}">${d.recipient_rank.toFixed(3)}</td>
+                    <td><strong>${d.weight.toFixed(3)}</strong></td>
+                `;
+                
+                tableBody.appendChild(row);
+            });
+        }
+    </script>
+</body>
+</html>

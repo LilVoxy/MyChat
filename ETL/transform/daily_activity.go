@@ -243,7 +243,7 @@ func (p *DailyActivityProcessor) getLastProcessedMessageID() (int, error) {
 	var lastID int
 	err := p.olapDB.QueryRow(`
 		SELECT last_processed_message_id 
-		FROM etl_runs 
+		FROM etl_run_log 
 		WHERE status = 'success' 
 		ORDER BY end_time DESC 
 		LIMIT 1
@@ -293,7 +293,7 @@ func (p *DailyActivityProcessor) getActivityDataFromLastID(lastProcessedMessageI
 		// Если сообщений нет, используем дату из последнего успешного запуска
 		err := p.olapDB.QueryRow(`
 			SELECT end_time 
-			FROM etl_runs 
+			FROM etl_run_log 
 			WHERE status = 'success' 
 			ORDER BY end_time DESC 
 			LIMIT 1

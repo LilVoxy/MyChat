@@ -51,6 +51,50 @@ func (p *MessageFactsProcessor) ProcessMessageFacts(messages []models.MessageOLT
 		chatMessages[msg.ChatID] = append(chatMessages[msg.ChatID], msg)
 	}
 
+	// Проверяем, для всех ли сообщений есть соответствующие чаты
+	var missingChats []int
+	for chatID := range chatMessages {
+		if _, exists := chatMap[chatID]; !exists {
+			missingChats = append(missingChats, chatID)
+		}
+	}
+
+	// Если есть сообщения без соответствующих чатов, запрашиваем недостающие чаты из базы
+	if len(missingChats) > 0 {
+		p.logger.Debug("Найдено %d чатов, отсутствующих в извлеченных данных. Запрашиваем дополнительно.", len(missingChats))
+
+		placeholders := make([]string, len(missingChats))
+		args := make([]interface{}, len(missingChats))
+		for i, chatID := range missingChats {
+			placeholders[i] = "?"
+			args[i] = chatID
+		}
+
+		query := fmt.Sprintf(`
+			SELECT id, buyer_id, seller_id, created_at 
+			FROM chats 
+			WHERE id IN (%s)`, strings.Join(placeholders, ","))
+
+		rows, err := p.oltpDB.Query(query, args...)
+		if err != nil {
+			p.logger.Error("Ошибка при запросе дополнительных чатов: %v", err)
+			// Продолжаем выполнение, но это может привести к неполной обработке
+		} else {
+			defer rows.Close()
+			for rows.Next() {
+				var chat models.ChatOLTP
+				err := rows.Scan(&chat.ID, &chat.BuyerID, &chat.SellerID, &chat.CreatedAt)
+				if err != nil {
+					p.logger.Error("Ошибка при сканировании данных чата: %v", err)
+					continue
+				}
+				chatMap[chat.ID] = chat
+			}
+
+			p.logger.Debug("Дополнительно получено %d чатов из базы данных", len(chatMap)-len(chats))
+		}
+	}
+
 	// Для каждого чата сортируем сообщения по времени и определяем первые сообщения
 	for chatID, msgs := range chatMessages {
 		// Сортируем сообщения по времени (предполагаем, что они уже отсортированы)
@@ -71,7 +115,7 @@ func (p *MessageFactsProcessor) ProcessMessageFacts(messages []models.MessageOLT
 		// Получаем информацию о чате
 		chat, chatExists := chatMap[chatID]
 		if !chatExists {
-			p.logger.Debug("Чат с ID %d не найден в извлеченных данных", chatID)
+			p.logger.Debug("Чат с ID %d не найден даже после дополнительного запроса. Пропускаем обработку сообщений этого чата.", chatID)
 			continue
 		}
 
@@ -108,7 +152,7 @@ func (p *MessageFactsProcessor) ProcessMessageFacts(messages []models.MessageOLT
 			if timeID == 0 {
 				var err error
 				timeID, err = p.ensureTimeDimensionRecord(msg.CreatedAt)
-			if err != nil {
+				if err != nil {
 					p.logger.Error("Не удалось создать запись в time_dimension для сообщения %d: %v", msg.ID, err)
 					continue // Пропускаем это сообщение
 				}
@@ -244,4 +288,3 @@ func (p *MessageFactsProcessor) ensureTimeDimensionRecord(t time.Time) (int, err
 		t.Format("2006-01-02"), lastID)
 	return int(lastID), nil
 }
- 

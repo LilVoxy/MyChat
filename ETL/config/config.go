@@ -68,15 +68,13 @@ var (
 		OLTPConfig:            DefaultOLTPConfig,
 		OLAPConfig:            DefaultOLAPConfig,
 		RunInterval:           1 * time.Hour,
-		BatchSize:             1000,
+		BatchSize:             10000,
 		EnableDetailedLogging: true,
 	}
 )
 
 // GetConfig возвращает конфигурацию ETL
 func GetConfig() ETLConfig {
-	// В реальном проекте здесь был бы код для загрузки конфигурации из файла
-	// или из переменных окружения, но для простоты возвращаем значения по умолчанию
 	config := DefaultETLConfig
 
 	// Настройка порогов активности

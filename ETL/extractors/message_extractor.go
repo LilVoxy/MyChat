@@ -24,21 +24,21 @@ func NewMessageExtractor(db *sql.DB, logger *utils.ETLLogger) *MessageExtractor 
 }
 
 // ExtractMessages извлекает данные о сообщениях
-// Если указаны lastRunTime и lastMessageID, будут извлечены только сообщения, созданные после этого времени и с ID больше lastMessageID
-func (e *MessageExtractor) ExtractMessages(lastRunTime time.Time, lastMessageID int, batchSize int) ([]models.MessageOLTP, error) {
-	e.logger.Debug("Начало извлечения данных о сообщениях (lastRunTime: %v, lastMessageID: %d)", lastRunTime, lastMessageID)
+// Теперь извлекает только по id (lastMessageID), игнорируя дату
+func (e *MessageExtractor) ExtractMessages(_ time.Time, lastMessageID int, batchSize int) ([]models.MessageOLTP, error) {
+	e.logger.Debug("Начало извлечения данных о сообщениях (lastMessageID: %d)", lastMessageID)
 
 	query := `
 		SELECT id, chat_id, sender_id, message, created_at, read_status 
 		FROM messages 
-		WHERE created_at > ? AND id > ?
+		WHERE id > ?
 		ORDER BY id
 		LIMIT ?
 	`
+	params := []interface{}{lastMessageID, batchSize}
 
-	// Если lastRunTime равно нулевому времени и lastMessageID равен 0, извлекаем все сообщения
-	params := []interface{}{lastRunTime, lastMessageID, batchSize}
-	if lastRunTime.IsZero() && lastMessageID == 0 {
+	// Если lastMessageID == 0, извлекаем все сообщения
+	if lastMessageID == 0 {
 		query = `
 			SELECT id, chat_id, sender_id, message, created_at, read_status 
 			FROM messages
@@ -46,29 +46,8 @@ func (e *MessageExtractor) ExtractMessages(lastRunTime time.Time, lastMessageID 
 			LIMIT ?
 		`
 		params = []interface{}{batchSize}
-	} else if lastRunTime.IsZero() {
-		// Только по ID
-		query = `
-			SELECT id, chat_id, sender_id, message, created_at, read_status 
-			FROM messages
-			WHERE id > ?
-			ORDER BY id
-			LIMIT ?
-		`
-		params = []interface{}{lastMessageID, batchSize}
-	} else if lastMessageID == 0 {
-		// Только по времени
-		query = `
-			SELECT id, chat_id, sender_id, message, created_at, read_status 
-			FROM messages
-			WHERE created_at > ?
-			ORDER BY id
-			LIMIT ?
-		`
-		params = []interface{}{lastRunTime, batchSize}
 	}
 
-	// Выполняем запрос
 	rows, err := e.db.Query(query, params...)
 	if err != nil {
 		e.logger.Error("Ошибка при извлечении данных о сообщениях: %v", err)
@@ -76,7 +55,6 @@ func (e *MessageExtractor) ExtractMessages(lastRunTime time.Time, lastMessageID 
 	}
 	defer rows.Close()
 
-	// Обрабатываем результаты
 	var messages []models.MessageOLTP
 	for rows.Next() {
 		var message models.MessageOLTP
@@ -87,7 +65,6 @@ func (e *MessageExtractor) ExtractMessages(lastRunTime time.Time, lastMessageID 
 		messages = append(messages, message)
 	}
 
-	// Проверяем ошибки после итерации по результатам
 	if err = rows.Err(); err != nil {
 		e.logger.Error("Ошибка после итерации по сообщениям: %v", err)
 		return nil, fmt.Errorf("ошибка после итерации по сообщениям: %w", err)
